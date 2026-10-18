@@ -49,22 +49,7 @@ def _connect_po():
             _po_status = "PO_AUTH_JSON missing or unrecognized; demo feed active"
             return
         from pocketoptionapi import PocketOption
-        # The upstream client currently ships a short regional server list.
-        # Add additional community-documented regions as connection fallbacks.
-        # This only changes read-only market-data endpoints; order methods are never called.
-        from pocketoptionapi.constants import REGION
-        REGION.REAL_SERVERS.update({
-            "FR": "wss://api-fr.po.market/socket.io/?EIO=4&transport=websocket",
-            "MSK": "wss://api-msk.po.market/socket.io/?EIO=4&transport=websocket",
-            "L": "wss://api-l.po.market/socket.io/?EIO=4&transport=websocket",
-            "FIN": "wss://api-fin.po.market/socket.io/?EIO=4&transport=websocket",
-            "FR_2": "wss://api-fr2.po.market/socket.io/?EIO=4&transport=websocket",
-            "ASIA": "wss://api-asia.po.market/socket.io/?EIO=4&transport=websocket",
-            "US_3": "wss://api-us3.po.market/socket.io/?EIO=4&transport=websocket",
-            "SPB": "wss://api-spb.po.market/socket.io/?EIO=4&transport=websocket",
-            "SC": "wss://api-sc.po.market/socket.io/?EIO=4&transport=websocket",
-            "C": "wss://api-c.po.market/socket.io/?EIO=4&transport=websocket",
-        })
+        # Use the installed upstream client's maintained server discovery and defaults.
         client = PocketOption(ssid)
         ok, err = client.connect()
         if not ok:
