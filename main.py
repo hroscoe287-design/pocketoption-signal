@@ -48,8 +48,15 @@ def rsi(values, period=14):
     if losses == 0: return 100.0 if gains else 50.0
     return 100 - (100 / (1 + gains / losses))
 
-def snapshot():
-    global _price
+def snapshot(tf=None, asset=None):
+    global _price, _bars, TIMEFRAME, ASSET, _rng
+    requested_tf = min(3600, max(5, int(tf or TIMEFRAME)))
+    requested_asset = str(asset or ASSET)[:64]
+    if requested_tf != TIMEFRAME or requested_asset != ASSET:
+        TIMEFRAME = requested_tf
+        ASSET = requested_asset
+        _rng = random.Random(42 + sum(ord(ch) for ch in ASSET) + TIMEFRAME)
+        seed_bars()
     step = max(5, TIMEFRAME)
     now = int(datetime.now(timezone.utc).timestamp())
     last = _bars[-1]
@@ -70,23 +77,36 @@ def snapshot():
     macd_line = [a-b for a,b in zip(ema(closes,12), ema(closes,26))]
     macd_signal = ema(macd_line, 9)
     rv = rsi(closes)
+    # Original WaveTrend-style momentum calculation; not the commercial Godmode formula.
+    typical = [(b["high"] + b["low"] + b["close"]) / 3 for b in _bars]
+    esa = ema(typical, 10)
+    deviation = ema([abs(v - e) for v, e in zip(typical, esa)], 10)
+    ci = [(typical[i] - esa[i]) / (0.015 * deviation[i]) if deviation[i] > 1e-12 else 0.0 for i in range(len(typical))]
+    wt1 = ema(ci, 21)
+    wt2 = [sum(wt1[max(0, i - 3):i + 1]) / len(wt1[max(0, i - 3):i + 1]) for i in range(len(wt1))]
+    wt_cross = 1 if wt1[-1] > wt2[-1] else -1
+    prior_cross = 1 if wt1[-2] > wt2[-2] else -1
+    wt_event = "BULL CROSS" if wt_cross > 0 and prior_cross < 0 else ("BEAR CROSS" if wt_cross < 0 and prior_cross > 0 else "NO CROSS")
     trend = 1 if fast[-1] > slow[-1] else -1
     mom = 1 if macd_line[-1] > macd_signal[-1] else -1
-    score = (1 if trend > 0 else -1) + (1 if mom > 0 else -1) + (1 if rv >= 52 else (-1 if rv <= 48 else 0))
-    signal = "BUY" if score >= 2 else ("SELL" if score <= -2 else "WAIT")
+    rsi_bias = 1 if rv >= 52 else (-1 if rv <= 48 else 0)
+    score = trend + mom + rsi_bias + wt_cross
+    signal = "BUY" if score >= 3 else ("SELL" if score <= -3 else "WAIT")
     return {
         "asset": ASSET, "timeframe_seconds": step, "price": round(closes[-1], 6),
-        "signal": signal, "score": score, "confidence": min(95, 50 + abs(score) * 12),
+        "signal": signal, "score": score, "confidence": min(95, 50 + abs(score) * 10),
         "rsi": round(rv, 2), "ema9": round(fast[-1], 6), "ema21": round(slow[-1], 6),
         "macd_bias": "BULLISH" if mom > 0 else "BEARISH",
         "trend": "BULLISH" if trend > 0 else "BEARISH",
+        "wavetrend": round(wt1[-1], 2), "wavetrend_signal": round(wt2[-1], 2),
+        "wavetrend_bias": "BULLISH" if wt_cross > 0 else "BEARISH", "wavetrend_event": wt_event,
         "bars": _bars[-120:], "updated_at": datetime.now(timezone.utc).isoformat(),
         "data_mode": "SYNTHETIC DEMO — NOT LIVE MARKET DATA"
     }
 
 @app.get("/api/market")
-def market():
-    return snapshot()
+def market(tf: int = 15, asset: str = ASSET):
+    return snapshot(tf=tf, asset=asset)
 
 @app.get("/health")
 def health():
@@ -122,7 +142,7 @@ main{max-width:1400px;margin:auto;padding:18px;display:grid;grid-template-column
 <body><header><div><div class="brand">GODMODE <span>V4</span> / SIGNAL LAB</div><div class="sub">POCKET OPTION • MULTI-TIMEFRAME RESEARCH TERMINAL</div></div><div class="pill">● SIGNAL-ONLY MODE</div></header>
 <main><section class="panel"><div class="panelhead"><h2>PRICE ACTION / CANDLESTICKS</h2><div class="controls"><button class="active" data-tf="5">5s</button><button data-tf="15">15s</button><button data-tf="60">1m</button><button data-tf="300">5m</button></div><select id="asset"><option>EURUSD_otc</option><option>GBPUSD_otc</option><option>USDJPY_otc</option><option>AUDUSD_otc</option><option>EURUSD</option></select></div><div id="chart"></div><div class="disclaimer">DEMO FEED: synthetic candles only. Do not treat these as live prices or trading recommendations.</div></section>
 <aside class="side"><section class="panel signalpanel"><div class="signalbox"><div class="label">CURRENT CONFLUENCE SIGNAL</div><div id="signal" class="signal WAIT">WAIT</div><div id="price" class="price">—</div><div id="assetname" class="small">EURUSD_otc</div><div class="meter"><div id="meter"></div></div><div class="small">Illustrative confluence score: <b id="confidence">—</b></div></div><div class="actions"><div class="action buy">BUY / CALL</div><div class="action sell">SELL / PUT</div></div></section>
-<section class="panel"><div class="panelhead"><h2>INDICATOR CONFIRMATION</h2><span class="small">LIVE UPDATE</span></div><div class="metrics"><div class="metric"><div class="label">EMA 9 / 21</div><div id="trend" class="v">—</div></div><div class="metric"><div class="label">RSI (14)</div><div id="rsi" class="v">—</div></div><div class="metric"><div class="label">MACD BIAS</div><div id="macd" class="v">—</div></div><div class="metric"><div class="label">SCORE</div><div id="score" class="v">—</div></div></div></section>
+<section class="panel"><div class="panelhead"><h2>INDICATOR CONFIRMATION</h2><span class="small">LIVE UPDATE</span></div><div class="metrics"><div class="metric"><div class="label">EMA 9 / 21</div><div id="trend" class="v">—</div></div><div class="metric"><div class="label">RSI (14)</div><div id="rsi" class="v">—</div></div><div class="metric"><div class="label">MACD BIAS</div><div id="macd" class="v">—</div></div><div class="metric"><div class="label">WAVETREND</div><div id="wt" class="v">—</div><div id="wtevent" class="small">—</div></div><div class="metric"><div class="label">SCORE</div><div id="score" class="v">—</div></div></div></section>
 <section class="panel"><div class="panelhead"><h2>SESSION STATUS</h2></div><div class="history"><div>Feed status: <b class="gold">DEMO MODE</b></div><div>Automatic execution: <b>DISABLED</b></div><div>Last refresh: <span id="updated">—</span></div><div>Strategy: EMA + RSI + MACD</div></div></section></aside></main>
 <div class="foot">This is an original experimental signal prototype, not the proprietary Godmode V4 algorithm. Demo prices are synthetic; signal strength is not a probability of winning. Binary-options trading carries a high risk of loss. Connect only a permitted, documented market-data source before evaluating real signals.</div>
 <script>
@@ -131,6 +151,6 @@ function initChart(){if(!window.LightweightCharts){chartEl.innerHTML='<div style
 chart=LightweightCharts.createChart(chartEl,{layout:{background:{color:'#0d1320'},textColor:'#aab7cc'},grid:{vertLines:{color:'#1b263a'},horzLines:{color:'#1b263a'}},rightPriceScale:{borderColor:'#29364c'},timeScale:{borderColor:'#29364c',timeVisible:true,secondsVisible:true},crosshair:{mode:0}});
 candleSeries=chart.addCandlestickSeries({upColor:'#23d6a0',downColor:'#ff5277',borderUpColor:'#23d6a0',borderDownColor:'#ff5277',wickUpColor:'#23d6a0',wickDownColor:'#ff5277'});new ResizeObserver(()=>chart.applyOptions({width:chartEl.clientWidth})).observe(chartEl)}
 async function refresh(){try{const r=await fetch('/api/market?tf='+selectedTF+'&asset='+encodeURIComponent(document.getElementById('asset').value));const d=await r.json();if(candleSeries){candleSeries.setData(d.bars);chart.timeScale().fitContent()}
-const s=document.getElementById('signal');s.textContent=d.signal;s.className='signal '+d.signal;document.getElementById('price').textContent=Number(d.price).toFixed(6);document.getElementById('assetname').textContent=d.asset+' • '+d.timeframe_seconds+'s candles';document.getElementById('confidence').textContent=d.confidence+'/100 score';document.getElementById('meter').style.width=d.confidence+'%';document.getElementById('meter').style.background=d.signal==='SELL'?'#ff5277':d.signal==='BUY'?'#23d6a0':'#ffca67';document.getElementById('trend').textContent=d.trend;document.getElementById('trend').className='v '+(d.trend==='BULLISH'?'good':'bad');document.getElementById('rsi').textContent=d.rsi;document.getElementById('rsi').className='v '+(d.rsi>70||d.rsi<30?'gold':'');document.getElementById('macd').textContent=d.macd_bias;document.getElementById('macd').className='v '+(d.macd_bias==='BULLISH'?'good':'bad');document.getElementById('score').textContent=(d.score>0?'+':'')+d.score;document.getElementById('updated').textContent=new Date(d.updated_at).toLocaleTimeString() }catch(e){document.getElementById('updated').textContent='API reconnecting'}}
+const s=document.getElementById('signal');s.textContent=d.signal;s.className='signal '+d.signal;document.getElementById('price').textContent=Number(d.price).toFixed(6);document.getElementById('assetname').textContent=d.asset+' • '+d.timeframe_seconds+'s candles';document.getElementById('confidence').textContent=d.confidence+'/100 score';document.getElementById('meter').style.width=d.confidence+'%';document.getElementById('meter').style.background=d.signal==='SELL'?'#ff5277':d.signal==='BUY'?'#23d6a0':'#ffca67';document.getElementById('trend').textContent=d.trend;document.getElementById('trend').className='v '+(d.trend==='BULLISH'?'good':'bad');document.getElementById('rsi').textContent=d.rsi;document.getElementById('rsi').className='v '+(d.rsi>70||d.rsi<30?'gold':'');document.getElementById('macd').textContent=d.macd_bias;document.getElementById('macd').className='v '+(d.macd_bias==='BULLISH'?'good':'bad');document.getElementById('wt').textContent=d.wavetrend+' / '+d.wavetrend_signal;document.getElementById('wt').className='v '+(d.wavetrend_bias==='BULLISH'?'good':'bad');document.getElementById('wtevent').textContent=d.wavetrend_event;document.getElementById('score').textContent=(d.score>0?'+':'')+d.score;document.getElementById('updated').textContent=new Date(d.updated_at).toLocaleTimeString() }catch(e){document.getElementById('updated').textContent='API reconnecting'}}
 document.querySelectorAll('[data-tf]').forEach(b=>b.onclick=()=>{document.querySelectorAll('[data-tf]').forEach(x=>x.classList.remove('active'));b.classList.add('active');selectedTF=Number(b.dataset.tf);refresh()});document.getElementById('asset').onchange=refresh;initChart();refresh();setInterval(refresh,3000);
 </script></body></html>"""
