@@ -172,8 +172,9 @@ def _get_po_bars(asset, timeframe):
         normalized.sort(key=lambda b: b["time"])
         unique = {b["time"]: b for b in normalized}
         normalized = list(unique.values())[-120:]
-        if len(normalized) < 30:
-            _po_status = "Connected, but insufficient candle history; demo feed active"
+        if len(normalized) < 2:
+            _po_status = f"Pocket Option returned only {len(normalized)} valid candles for {asset} ({timeframe}s)"
+            logger.warning("Insufficient valid bars: symbol=%s period=%s count=%s", asset, timeframe, len(normalized))
             return None
         _po_last_key, _po_last_fetch, _po_cached_bars = key, now, normalized
         _po_status = "POCKET OPTION LIVE CANDLES"
@@ -277,6 +278,12 @@ def api_status():
         time_synced = bool(_po_client and _po_client.is_time_synced())
     except Exception:
         time_synced = False
+    assets = {}
+    try:
+        if _po_client:
+            assets = _po_client.get_assets() or {}
+    except Exception:
+        pass
     return {
         "status": _po_status,
         "live": _po_status == "POCKET OPTION LIVE CANDLES" or _po_status.startswith("POCKET OPTION LIVE TICKS"),
@@ -285,8 +292,45 @@ def api_status():
         "po_auth_format_recognized": bool(_auth_wire_value()),
         "client_loaded": _po_client is not None,
         "connected": connected,
-        "time_synced": time_synced
+        "time_synced": time_synced,
+        "broker_asset_count": len(assets),
+        "nzdusd_symbols_from_broker": [k for k in assets if "NZDUSD" in str(k).upper()],
+        "selected_asset_note": "Regular forex symbols may be closed outside weekday market hours; OTC symbols are separate instruments."
     }
+
+@app.get("/api/diagnostics")
+def api_diagnostics(asset: str = "NZDUSD", tf: int = 60):
+    if tf not in {5, 10, 15, 30, 60, 120, 180, 300, 600, 900, 1800, 3600, 7200, 14400, 86400, 604800, 2592000}:
+        return {"ok": False, "error": "Unsupported timeframe"}
+    assets = {}
+    try:
+        if _po_client:
+            assets = _po_client.get_assets() or {}
+    except Exception:
+        pass
+    broker_match = [k for k in assets if str(k).lower() == asset.lower()]
+    try:
+        bars = _get_po_bars(asset, tf) or []
+        return {
+            "ok": bool(bars),
+            "requested_asset": asset,
+            "timeframe_seconds": tf,
+            "status": _po_status,
+            "bar_count": len(bars),
+            "latest_bar": bars[-1] if bars else None,
+            "broker_exact_symbol_match": broker_match,
+            "broker_similar_symbols": [k for k in assets if asset.replace("_otc", "").lower() in str(k).lower()][:20],
+            "connection": {
+                "configured": bool(os.getenv("PO_AUTH_JSON", "").strip()),
+                "recognized": bool(_auth_wire_value()),
+                "connected": bool(_po_client and _po_client.check_connect()),
+                "time_synced": bool(_po_client and _po_client.is_time_synced())
+            }
+        }
+    except Exception as e:
+        logger.exception("PO diagnostics failed for %s tf=%s", asset, tf)
+        return {"ok": False, "requested_asset": asset, "timeframe_seconds": tf, "error_type": type(e).__name__, "status": _po_status}
+
 
 @app.get("/health")
 def health():
