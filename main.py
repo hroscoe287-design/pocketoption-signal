@@ -77,6 +77,23 @@ def _connect_po():
         _po_status = "Pocket Option client unavailable or auth rejected; demo feed active"
         logger.exception("Pocket Option setup failed; credential details withheld")
 
+
+_po_last_reconnect_attempt = 0.0
+
+def _schedule_po_reconnect(reason):
+    """Recreate a stale broker client with a cooldown; never place trades."""
+    global _po_client, _po_status, _po_connect_started, _po_last_reconnect_attempt
+    now = time.time()
+    with _po_lock:
+        if now - _po_last_reconnect_attempt < 15:
+            return
+        _po_last_reconnect_attempt = now
+        _po_client = None
+        _po_connect_started = False
+        _po_status = "Pocket Option connection lost; reconnecting; live feed unavailable"
+    logger.warning("Scheduling read-only Pocket Option reconnect: %s", reason)
+    threading.Thread(target=_connect_po, daemon=True, name="po-market-reconnect").start()
+
 app = FastAPI(title="Godmode V4 Pocket Option Signal Lab")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -120,7 +137,8 @@ def _get_po_bars(asset, timeframe):
         return _po_cached_bars
     try:
         if not client.check_connect():
-            _po_status = "Pocket Option disconnected; demo feed active"
+            _po_status = "Pocket Option disconnected; live feed unavailable"
+            _schedule_po_reconnect("client.check_connect() returned false")
             return None
         try:
             if not client.is_time_synced():
@@ -179,9 +197,12 @@ def _get_po_bars(asset, timeframe):
         _po_last_key, _po_last_fetch, _po_cached_bars = key, now, normalized
         _po_status = "POCKET OPTION LIVE CANDLES"
         return normalized
-    except Exception:
-        _po_status = "Pocket Option data request failed; demo feed active"
-        logger.warning("PO candle request failed; credential details withheld")
+    except Exception as e:
+        _po_status = "Pocket Option data request failed; live feed unavailable"
+        logger.warning("PO candle request failed (%s); credential details withheld", type(e).__name__)
+        # A dropped WebSocket can leave a stale client object that never reconnects.
+        if "connect" in str(e).lower() or "websocket" in str(e).lower() or "closed" in str(e).lower():
+            _schedule_po_reconnect(type(e).__name__)
         return None
 
 def ema(values, period):
