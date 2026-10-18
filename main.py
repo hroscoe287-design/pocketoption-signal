@@ -57,9 +57,22 @@ def _connect_po():
             # Connection errors contain endpoint/error diagnostics, not the SSID.
             logger.warning("PO connection failed: %s", err or "unknown reason")
             return
+        # Wait for server clock synchronization; history calls need it.
+        deadline = time.time() + 15
+        while time.time() < deadline:
+            try:
+                if client.check_connect() and client.is_time_synced():
+                    break
+            except Exception:
+                pass
+            time.sleep(0.25)
         _po_client = client
-        _po_status = "Pocket Option WebSocket connected; awaiting candle data"
-        logger.info("Pocket Option WebSocket connected; signal-only mode")
+        try:
+            synced = bool(client.is_time_synced())
+        except Exception:
+            synced = False
+        _po_status = "Pocket Option connected; server time synchronized" if synced else "Pocket Option connected; waiting for server time sync"
+        logger.info("Pocket Option WebSocket connected; time_synced=%s; signal-only mode", synced)
     except Exception:
         _po_status = "Pocket Option client unavailable or auth rejected; demo feed active"
         logger.exception("Pocket Option setup failed; credential details withheld")
@@ -109,10 +122,45 @@ def _get_po_bars(asset, timeframe):
         if not client.check_connect():
             _po_status = "Pocket Option disconnected; demo feed active"
             return None
-        client.subscribe(asset, period=timeframe)
-        candles = client.get_historical_candles(asset, timeframe, offset=9000, count_request=1)
+        try:
+            if not client.is_time_synced():
+                _po_status = "Pocket Option connected; waiting for server time sync"
+                return None
+        except Exception:
+            _po_status = "Pocket Option server time sync unavailable"
+            return None
+        if not client.subscribe(asset, period=timeframe):
+            _po_status = f"Pocket Option subscription failed for {asset}"
+            logger.warning("Pocket Option subscribe failed for symbol=%s period=%s", asset, timeframe)
+            return None
+        time.sleep(0.6)
+        # Upstream client recommends a large offset to avoid history timeouts.
+        candles = client.get_historical_candles(asset, timeframe, offset=45000, count_request=1)
         if not candles:
-            _po_status = "Connected, but no candles received; demo feed active"
+            _po_status = f"Connected, but Pocket Option returned no history for {asset} ({timeframe}s)"
+            logger.warning("No historical candles returned for symbol=%s period=%s", asset, timeframe)
+            # Use only genuine ticks as a fallback; never manufacture live data.
+            try:
+                ticks = client.get_realtime_ticks(asset, limit=5000)
+                buckets = {}
+                for ts, price in (ticks or []):
+                    t, p = int(float(ts)), float(price)
+                    bucket = (t // timeframe) * timeframe
+                    bar = buckets.get(bucket)
+                    if bar is None:
+                        buckets[bucket] = {"time": bucket, "open": p, "high": p, "low": p, "close": p}
+                    else:
+                        bar["high"] = max(bar["high"], p)
+                        bar["low"] = min(bar["low"], p)
+                        bar["close"] = p
+                tick_bars = [buckets[k] for k in sorted(buckets)]
+                if len(tick_bars) >= 2:
+                    normalized = tick_bars[-120:]
+                    _po_last_key, _po_last_fetch, _po_cached_bars = key, now, normalized
+                    _po_status = f"POCKET OPTION LIVE TICKS — {asset}"
+                    return normalized
+            except Exception:
+                logger.warning("Realtime tick fallback failed for symbol=%s", asset)
             return None
         normalized = []
         for b in candles:
@@ -211,7 +259,7 @@ def snapshot(tf=None, asset=None):
         "wavetrend_event": wt_event if is_live else "NO LIVE DATA",
         "bars": _bars[-120:],  # Live bars when verified; otherwise clearly labeled local demo candles for chart diagnostics.
         "updated_at": datetime.now(timezone.utc).isoformat(),
-        "data_mode": "POCKET OPTION LIVE CANDLES" if is_live else "LIVE FEED UNAVAILABLE — NO SYNTHETIC DATA SHOWN",
+        "data_mode": ("POCKET OPTION LIVE CANDLES" if is_live and _po_status == "POCKET OPTION LIVE CANDLES" else ("POCKET OPTION LIVE TICKS" if is_live and _po_status.startswith("POCKET OPTION LIVE TICKS") else "LIVE FEED UNAVAILABLE — NO SYNTHETIC DATA SHOWN")),
         "feed_status": _po_status
     }
 
@@ -221,7 +269,24 @@ def market(tf: int = 15, asset: str = ASSET):
 
 @app.get("/api/status")
 def api_status():
-    return {"status": _po_status, "live": _po_status == "POCKET OPTION LIVE CANDLES", "signal_only": True}
+    try:
+        connected = bool(_po_client and _po_client.check_connect())
+    except Exception:
+        connected = False
+    try:
+        time_synced = bool(_po_client and _po_client.is_time_synced())
+    except Exception:
+        time_synced = False
+    return {
+        "status": _po_status,
+        "live": _po_status == "POCKET OPTION LIVE CANDLES" or _po_status.startswith("POCKET OPTION LIVE TICKS"),
+        "signal_only": True,
+        "po_auth_configured": bool(os.getenv("PO_AUTH_JSON", "").strip()),
+        "po_auth_format_recognized": bool(_auth_wire_value()),
+        "client_loaded": _po_client is not None,
+        "connected": connected,
+        "time_synced": time_synced
+    }
 
 @app.get("/health")
 def health():
