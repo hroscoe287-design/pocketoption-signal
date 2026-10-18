@@ -2,7 +2,65 @@ from datetime import datetime, timezone
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
-import math, random, os
+import math, random, os, json, threading, time, logging
+
+logger = logging.getLogger("godmode.po")
+_po_client = None
+_po_status = "PO_AUTH_JSON not configured"
+_po_lock = threading.Lock()
+_po_last_fetch = 0.0
+_po_last_key = None
+_po_cached_bars = []
+_po_connect_started = False
+
+def _auth_wire_value():
+    raw = os.getenv("PO_AUTH_JSON", "").strip()
+    if not raw:
+        return None
+    if raw.startswith('42["auth",'):
+        return raw
+    try:
+        obj = json.loads(raw)
+    except Exception:
+        return None
+    if isinstance(obj, str) and obj.startswith('42["auth",'):
+        return obj
+    if isinstance(obj, dict):
+        if isinstance(obj.get("ssid"), str) and obj["ssid"].startswith('42["auth",'):
+            return obj["ssid"]
+        payload = obj.get("auth") if isinstance(obj.get("auth"), dict) else obj
+        if isinstance(payload, dict) and payload.get("session") and payload.get("uid") is not None:
+            payload = dict(payload)
+            payload.setdefault("platform", 2)
+            payload.setdefault("isFastHistory", True)
+            payload.setdefault("isOptimized", True)
+            return '42["auth",' + json.dumps(payload, separators=(",", ":")) + "]"
+    return None
+
+def _connect_po():
+    global _po_client, _po_status, _po_connect_started
+    with _po_lock:
+        if _po_connect_started:
+            return
+        _po_connect_started = True
+    try:
+        ssid = _auth_wire_value()
+        if not ssid:
+            _po_status = "PO_AUTH_JSON missing or unrecognized; demo feed active"
+            return
+        from pocketoptionapi import PocketOption
+        client = PocketOption(ssid)
+        ok, err = client.connect()
+        if not ok:
+            _po_status = "Pocket Option connection failed; demo feed active"
+            logger.warning("PO auth connection failed (details withheld)")
+            return
+        _po_client = client
+        _po_status = "Pocket Option WebSocket connected; awaiting candle data"
+        logger.info("Pocket Option WebSocket connected; signal-only mode")
+    except Exception:
+        _po_status = "Pocket Option client unavailable or auth rejected; demo feed active"
+        logger.exception("Pocket Option setup failed; credential details withheld")
 
 app = FastAPI(title="Godmode V4 Pocket Option Signal Lab")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -33,6 +91,48 @@ def seed_bars():
 
 seed_bars()
 
+# Read-only connection: this service never calls order-placement methods.
+threading.Thread(target=_connect_po, daemon=True, name="po-market-feed").start()
+
+def _get_po_bars(asset, timeframe):
+    global _po_status, _po_last_fetch, _po_last_key, _po_cached_bars
+    client = _po_client
+    if client is None:
+        return None
+    key = (asset, timeframe)
+    now = time.time()
+    if key == _po_last_key and now - _po_last_fetch < 4 and _po_cached_bars:
+        return _po_cached_bars
+    try:
+        if not client.check_connect():
+            _po_status = "Pocket Option disconnected; demo feed active"
+            return None
+        client.subscribe(asset, period=timeframe)
+        candles = client.get_historical_candles(asset, timeframe, offset=9000, count_request=1)
+        if not candles:
+            _po_status = "Connected, but no candles received; demo feed active"
+            return None
+        normalized = []
+        for b in candles:
+            try:
+                t = int(float(b.get("time", b.get("timestamp"))))
+                normalized.append({"time": t, "open": float(b["open"]), "high": float(b["high"]), "low": float(b["low"]), "close": float(b["close"])})
+            except (TypeError, ValueError, KeyError):
+                continue
+        normalized.sort(key=lambda b: b["time"])
+        unique = {b["time"]: b for b in normalized}
+        normalized = list(unique.values())[-120:]
+        if len(normalized) < 30:
+            _po_status = "Connected, but insufficient candle history; demo feed active"
+            return None
+        _po_last_key, _po_last_fetch, _po_cached_bars = key, now, normalized
+        _po_status = "POCKET OPTION LIVE CANDLES"
+        return normalized
+    except Exception:
+        _po_status = "Pocket Option data request failed; demo feed active"
+        logger.warning("PO candle request failed; credential details withheld")
+        return None
+
 def ema(values, period):
     if not values: return []
     alpha = 2 / (period + 1)
@@ -58,16 +158,21 @@ def snapshot(tf=None, asset=None):
         _rng = random.Random(42 + sum(ord(ch) for ch in ASSET) + TIMEFRAME)
         seed_bars()
     step = max(5, TIMEFRAME)
+    live_bars = _get_po_bars(ASSET, step)
+    is_live = bool(live_bars)
+    if is_live:
+        _bars = live_bars
+        _price = _bars[-1]["close"]
     now = int(datetime.now(timezone.utc).timestamp())
     last = _bars[-1]
-    # Advance the current demo candle gradually. This is synthetic demo data, not a broker feed.
-    if now >= last["time"] + step:
+    # Synthetic price movement is used only if real candles are unavailable.
+    if not is_live and now >= last["time"] + step:
         o = last["close"]
         move = math.sin(now / 17) * 0.000025 + _rng.uniform(-0.00007, 0.00007)
         c = max(0.5, o + move)
         _bars.append({"time": last["time"] + step, "open": o, "high": max(o,c), "low": min(o,c), "close": c})
         if len(_bars) > 180: _bars.pop(0)
-    else:
+    elif not is_live:
         move = math.sin(now / 7) * 0.000006 + _rng.uniform(-0.000004, 0.000004)
         last["close"] = round(max(0.5, last["close"] + move), 6)
         last["high"] = round(max(last["high"], last["close"]), 6)
@@ -101,16 +206,21 @@ def snapshot(tf=None, asset=None):
         "wavetrend": round(wt1[-1], 2), "wavetrend_signal": round(wt2[-1], 2),
         "wavetrend_bias": "BULLISH" if wt_cross > 0 else "BEARISH", "wavetrend_event": wt_event,
         "bars": _bars[-120:], "updated_at": datetime.now(timezone.utc).isoformat(),
-        "data_mode": "SYNTHETIC DEMO — NOT LIVE MARKET DATA"
+        "data_mode": "POCKET OPTION LIVE CANDLES" if is_live else "SYNTHETIC DEMO — NOT LIVE MARKET DATA",
+        "feed_status": _po_status
     }
 
 @app.get("/api/market")
 def market(tf: int = 15, asset: str = ASSET):
     return snapshot(tf=tf, asset=asset)
 
+@app.get("/api/status")
+def api_status():
+    return {"status": _po_status, "live": _po_status == "POCKET OPTION LIVE CANDLES", "signal_only": True}
+
 @app.get("/health")
 def health():
-    return {"status": "ok", "mode": "demo"}
+    return {"status": "ok", "mode": "live" if _po_status == "POCKET OPTION LIVE CANDLES" else "demo", "feed_status": _po_status}
 
 @app.get("/", response_class=HTMLResponse)
 def home():
@@ -140,10 +250,10 @@ main{max-width:1400px;margin:auto;padding:18px;display:grid;grid-template-column
 @media(max-width:850px){main{grid-template-columns:1fr;padding:10px}#chart{height:330px}header{padding:14px}.side{display:grid;grid-template-columns:1fr 1fr}.signalpanel{grid-column:1/-1}.metrics{grid-column:1/-1}.actions{grid-column:1/-1}}@media(max-width:480px){.side{display:flex}.brand{font-size:16px}#chart{height:290px}}
 </style></head>
 <body><header><div><div class="brand">GODMODE <span>V4</span> / SIGNAL LAB</div><div class="sub">POCKET OPTION • MULTI-TIMEFRAME RESEARCH TERMINAL</div></div><div class="pill">● SIGNAL-ONLY MODE</div></header>
-<main><section class="panel"><div class="panelhead"><h2>PRICE ACTION / CANDLESTICKS</h2><div class="controls" id="timeframes"><button class="active" data-tf="5">5s</button><button data-tf="10">10s</button><button data-tf="15">15s</button><button data-tf="30">30s</button><button data-tf="60">1m</button><button data-tf="120">2m</button><button data-tf="180">3m</button><button data-tf="300">5m</button><button data-tf="600">10m</button><button data-tf="900">15m</button><button data-tf="1800">30m</button><button data-tf="3600">1h</button><button data-tf="7200">2h</button><button data-tf="14400">4h</button><button data-tf="86400">1d</button><button data-tf="604800">1w</button><button data-tf="2592000">1mo</button></div><select id="asset"><optgroup label="Forex"><option>EURUSD</option><option>GBPUSD</option><option>USDJPY</option><option>USDCHF</option><option>USDCAD</option><option>AUDUSD</option><option>NZDUSD</option><option>EURGBP</option><option>EURJPY</option><option>EURCHF</option><option>EURAUD</option><option>EURNZD</option><option>EURCAD</option><option>GBPJPY</option><option>GBPCHF</option><option>GBPAUD</option><option>GBPCAD</option><option>GBPNZD</option><option>AUDJPY</option><option>AUDCHF</option><option>AUDCAD</option><option>AUDNZD</option><option>NZDJPY</option><option>NZDCHF</option><option>NZDCAD</option><option>CADJPY</option><option>CADCHF</option><option>CHFJPY</option></optgroup><optgroup label="OTC Currency"><option>EURUSD_otc</option><option>AUDCAD_otc</option><option>AUDCHF_otc</option><option>AUDJPY_otc</option><option>AUDNZD_otc</option><option>AUDUSD_otc</option><option>CADCHF_otc</option><option>CADJPY_otc</option><option>CHFJPY_otc</option><option>EURCHF_otc</option><option>EURGBP_otc</option><option>EURJPY_otc</option><option>EURNZD_otc</option><option>GBPAUD_otc</option><option>GBPJPY_otc</option><option>GBPUSD_otc</option><option>NZDJPY_otc</option><option>NZDUSD_otc</option><option>USDCAD_otc</option><option>USDCHF_otc</option><option>USDJPY_otc</option><option>USDMXN_otc</option><option>USDBRL_otc</option><option>USDINR_otc</option><option>USDSGD_otc</option></optgroup><optgroup label="OTC Commodities"><option>Gold_otc</option><option>Silver_otc</option><option>Brent_Oil_otc</option><option>WTI_Crude_Oil_otc</option><option>Natural_Gas_otc</option><option>Platinum_spot_otc</option><option>Palladium_spot_otc</option></optgroup><optgroup label="OTC Stocks"><option>Apple_otc</option><option>Microsoft_otc</option><option>Amazon_otc</option><option>Tesla_otc</option><option>Netflix_otc</option><option>AMD_otc</option><option>Intel_otc</option><option>Cisco_otc</option><option>Alibaba_otc</option><option>Coinbase_otc</option><option>VISA_otc</option><option>ExxonMobil_otc</option><option>Pfizer_otc</option><option>Palantir_Technologies_otc</option><option>GameStop_otc</option></optgroup><optgroup label="OTC Crypto"><option>Bitcoin_otc</option><option>Ethereum_otc</option><option>BNB_otc</option><option>Solana_otc</option><option>Cardano_otc</option><option>Dogecoin_otc</option><option>Litecoin_otc</option><option>Chainlink_otc</option><option>Polygon_otc</option><option>Polkadot_otc</option><option>TRON_otc</option><option>Avalanche_otc</option><option>Toncoin_otc</option></optgroup><optgroup label="OTC Indices"><option>AUS_200_otc</option><option>E35EUR_otc</option><option>100GBP_otc</option><option>F40EUR_otc</option><option>JPN225_otc</option><option>D30EUR_otc</option><option>E50EUR_otc</option><option>SP500_otc</option><option>DJI30_otc</option><option>US100_otc</option></optgroup><optgroup label="Crypto"><option>Bitcoin</option><option>Ethereum</option><option>Dogecoin</option><option>Dash</option><option>BCH_EUR</option><option>BCH_GBP</option><option>BCH_JPY</option><option>BTC_GBP</option><option>BTC_JPY</option><option>Chainlink</option></optgroup></select><a class="platformlink" href="https://pocketoption.com/en/" target="_blank" rel="noopener noreferrer">OPEN POCKET OPTION ↗</a></div><div id="chart"></div><div class="disclaimer">DEMO FEED: synthetic candles only. Pocket Option live prices are NOT connected. Use OPEN POCKET OPTION to view the official platform.</div></section>
+<main><section class="panel"><div class="panelhead"><h2>PRICE ACTION / CANDLESTICKS</h2><div class="controls" id="timeframes"><button class="active" data-tf="5">5s</button><button data-tf="10">10s</button><button data-tf="15">15s</button><button data-tf="30">30s</button><button data-tf="60">1m</button><button data-tf="120">2m</button><button data-tf="180">3m</button><button data-tf="300">5m</button><button data-tf="600">10m</button><button data-tf="900">15m</button><button data-tf="1800">30m</button><button data-tf="3600">1h</button><button data-tf="7200">2h</button><button data-tf="14400">4h</button><button data-tf="86400">1d</button><button data-tf="604800">1w</button><button data-tf="2592000">1mo</button></div><select id="asset"><optgroup label="Forex"><option>EURUSD</option><option>GBPUSD</option><option>USDJPY</option><option>USDCHF</option><option>USDCAD</option><option>AUDUSD</option><option>NZDUSD</option><option>EURGBP</option><option>EURJPY</option><option>EURCHF</option><option>EURAUD</option><option>EURNZD</option><option>EURCAD</option><option>GBPJPY</option><option>GBPCHF</option><option>GBPAUD</option><option>GBPCAD</option><option>GBPNZD</option><option>AUDJPY</option><option>AUDCHF</option><option>AUDCAD</option><option>AUDNZD</option><option>NZDJPY</option><option>NZDCHF</option><option>NZDCAD</option><option>CADJPY</option><option>CADCHF</option><option>CHFJPY</option></optgroup><optgroup label="OTC Currency"><option>EURUSD_otc</option><option>AUDCAD_otc</option><option>AUDCHF_otc</option><option>AUDJPY_otc</option><option>AUDNZD_otc</option><option>AUDUSD_otc</option><option>CADCHF_otc</option><option>CADJPY_otc</option><option>CHFJPY_otc</option><option>EURCHF_otc</option><option>EURGBP_otc</option><option>EURJPY_otc</option><option>EURNZD_otc</option><option>GBPAUD_otc</option><option>GBPJPY_otc</option><option>GBPUSD_otc</option><option>NZDJPY_otc</option><option>NZDUSD_otc</option><option>USDCAD_otc</option><option>USDCHF_otc</option><option>USDJPY_otc</option><option>USDMXN_otc</option><option>USDBRL_otc</option><option>USDINR_otc</option><option>USDSGD_otc</option></optgroup><optgroup label="OTC Commodities"><option>Gold_otc</option><option>Silver_otc</option><option>Brent_Oil_otc</option><option>WTI_Crude_Oil_otc</option><option>Natural_Gas_otc</option><option>Platinum_spot_otc</option><option>Palladium_spot_otc</option></optgroup><optgroup label="OTC Stocks"><option>Apple_otc</option><option>Microsoft_otc</option><option>Amazon_otc</option><option>Tesla_otc</option><option>Netflix_otc</option><option>AMD_otc</option><option>Intel_otc</option><option>Cisco_otc</option><option>Alibaba_otc</option><option>Coinbase_otc</option><option>VISA_otc</option><option>ExxonMobil_otc</option><option>Pfizer_otc</option><option>Palantir_Technologies_otc</option><option>GameStop_otc</option></optgroup><optgroup label="OTC Crypto"><option>Bitcoin_otc</option><option>Ethereum_otc</option><option>BNB_otc</option><option>Solana_otc</option><option>Cardano_otc</option><option>Dogecoin_otc</option><option>Litecoin_otc</option><option>Chainlink_otc</option><option>Polygon_otc</option><option>Polkadot_otc</option><option>TRON_otc</option><option>Avalanche_otc</option><option>Toncoin_otc</option></optgroup><optgroup label="OTC Indices"><option>AUS_200_otc</option><option>E35EUR_otc</option><option>100GBP_otc</option><option>F40EUR_otc</option><option>JPN225_otc</option><option>D30EUR_otc</option><option>E50EUR_otc</option><option>SP500_otc</option><option>DJI30_otc</option><option>US100_otc</option></optgroup><optgroup label="Crypto"><option>Bitcoin</option><option>Ethereum</option><option>Dogecoin</option><option>Dash</option><option>BCH_EUR</option><option>BCH_GBP</option><option>BCH_JPY</option><option>BTC_GBP</option><option>BTC_JPY</option><option>Chainlink</option></optgroup></select><a class="platformlink" href="https://pocketoption.com/en/" target="_blank" rel="noopener noreferrer">OPEN POCKET OPTION ↗</a></div><div id="chart"></div><div class="disclaimer" id="feedbanner">Connecting to configured Pocket Option session; demo candles remain labeled until live data is verified.</div></section>
 <aside class="side"><section class="panel signalpanel"><div class="signalbox"><div class="label">CURRENT CONFLUENCE SIGNAL</div><div id="signal" class="signal WAIT">WAIT</div><div id="price" class="price">—</div><div id="assetname" class="small">EURUSD_otc</div><div class="meter"><div id="meter"></div></div><div class="small">Illustrative confluence score: <b id="confidence">—</b></div></div><div class="actions"><div class="action buy">BUY / CALL</div><div class="action sell">SELL / PUT</div></div></section>
 <section class="panel"><div class="panelhead"><h2>INDICATOR CONFIRMATION</h2><span class="small">LIVE UPDATE</span></div><div class="metrics"><div class="metric"><div class="label">EMA 9 / 21</div><div id="trend" class="v">—</div></div><div class="metric"><div class="label">RSI (14)</div><div id="rsi" class="v">—</div></div><div class="metric"><div class="label">MACD BIAS</div><div id="macd" class="v">—</div></div><div class="metric"><div class="label">WAVETREND</div><div id="wt" class="v">—</div><div id="wtevent" class="small">—</div></div><div class="metric"><div class="label">SCORE</div><div id="score" class="v">—</div></div></div></section>
-<section class="panel"><div class="panelhead"><h2>SESSION STATUS</h2></div><div class="history"><div>Feed status: <b class="gold">SYNTHETIC DEMO — NOT LIVE</b></div><div>Official live chart: <a style="color:var(--gold)" href="https://pocketoption.com/en/" target="_blank" rel="noopener noreferrer">Open Pocket Option ↗</a></div><div>Automatic execution: <b>DISABLED</b></div><div>Last refresh: <span id="updated">—</span></div><div>Strategy: EMA + RSI + MACD</div></div></section></aside></main>
+<section class="panel"><div class="panelhead"><h2>SESSION STATUS</h2></div><div class="history"><div>Feed status: <b id="feedstatus" class="gold">CONNECTING / DEMO FALLBACK</b></div><div>Official live chart: <a style="color:var(--gold)" href="https://pocketoption.com/en/" target="_blank" rel="noopener noreferrer">Open Pocket Option ↗</a></div><div>Automatic execution: <b>DISABLED</b></div><div>Last refresh: <span id="updated">—</span></div><div>Strategy: EMA + RSI + MACD</div></div></section></aside></main>
 <div class="foot">This is an original experimental signal prototype, not the proprietary Godmode V4 algorithm. Demo prices are synthetic; signal strength is not a probability of winning. Binary-options trading carries a high risk of loss. Connect only a permitted, documented market-data source before evaluating real signals.</div>
 <script>
 const chartEl=document.getElementById('chart');let chart=null,candleSeries=null,selectedTF=15;
@@ -151,6 +261,6 @@ function initChart(){if(!window.LightweightCharts){chartEl.innerHTML='<div style
 chart=LightweightCharts.createChart(chartEl,{layout:{background:{color:'#0d1320'},textColor:'#aab7cc'},grid:{vertLines:{color:'#1b263a'},horzLines:{color:'#1b263a'}},rightPriceScale:{borderColor:'#29364c'},timeScale:{borderColor:'#29364c',timeVisible:true,secondsVisible:true},crosshair:{mode:0}});
 candleSeries=chart.addCandlestickSeries({upColor:'#23d6a0',downColor:'#ff5277',borderUpColor:'#23d6a0',borderDownColor:'#ff5277',wickUpColor:'#23d6a0',wickDownColor:'#ff5277'});new ResizeObserver(()=>chart.applyOptions({width:chartEl.clientWidth})).observe(chartEl)}
 async function refresh(){try{const r=await fetch('/api/market?tf='+selectedTF+'&asset='+encodeURIComponent(document.getElementById('asset').value));const d=await r.json();if(candleSeries){candleSeries.setData(d.bars);chart.timeScale().fitContent()}
-const s=document.getElementById('signal');s.textContent=d.signal;s.className='signal '+d.signal;document.getElementById('price').textContent=Number(d.price).toFixed(6);document.getElementById('assetname').textContent=d.asset+' • '+d.timeframe_seconds+'s candles';document.getElementById('confidence').textContent=d.confidence+'/100 score';document.getElementById('meter').style.width=d.confidence+'%';document.getElementById('meter').style.background=d.signal==='SELL'?'#ff5277':d.signal==='BUY'?'#23d6a0':'#ffca67';document.getElementById('trend').textContent=d.trend;document.getElementById('trend').className='v '+(d.trend==='BULLISH'?'good':'bad');document.getElementById('rsi').textContent=d.rsi;document.getElementById('rsi').className='v '+(d.rsi>70||d.rsi<30?'gold':'');document.getElementById('macd').textContent=d.macd_bias;document.getElementById('macd').className='v '+(d.macd_bias==='BULLISH'?'good':'bad');document.getElementById('wt').textContent=d.wavetrend+' / '+d.wavetrend_signal;document.getElementById('wt').className='v '+(d.wavetrend_bias==='BULLISH'?'good':'bad');document.getElementById('wtevent').textContent=d.wavetrend_event;document.getElementById('score').textContent=(d.score>0?'+':'')+d.score;document.getElementById('updated').textContent=new Date(d.updated_at).toLocaleTimeString() }catch(e){document.getElementById('updated').textContent='API reconnecting'}}
+const s=document.getElementById('signal');s.textContent=d.signal;s.className='signal '+d.signal;document.getElementById('price').textContent=Number(d.price).toFixed(6);document.getElementById('assetname').textContent=d.asset+' • '+d.timeframe_seconds+'s candles';document.getElementById('confidence').textContent=d.confidence+'/100 score';document.getElementById('meter').style.width=d.confidence+'%';document.getElementById('meter').style.background=d.signal==='SELL'?'#ff5277':d.signal==='BUY'?'#23d6a0':'#ffca67';document.getElementById('trend').textContent=d.trend;document.getElementById('trend').className='v '+(d.trend==='BULLISH'?'good':'bad');document.getElementById('rsi').textContent=d.rsi;document.getElementById('rsi').className='v '+(d.rsi>70||d.rsi<30?'gold':'');document.getElementById('macd').textContent=d.macd_bias;document.getElementById('macd').className='v '+(d.macd_bias==='BULLISH'?'good':'bad');document.getElementById('wt').textContent=d.wavetrend+' / '+d.wavetrend_signal;document.getElementById('wt').className='v '+(d.wavetrend_bias==='BULLISH'?'good':'bad');document.getElementById('wtevent').textContent=d.wavetrend_event;document.getElementById('score').textContent=(d.score>0?'+':'')+d.score;document.getElementById('updated').textContent=new Date(d.updated_at).toLocaleTimeString();const live=d.data_mode==='POCKET OPTION LIVE CANDLES';document.getElementById('feedbanner').textContent=live?'POCKET OPTION LIVE CANDLES — read-only session feed verified. No trades are executed.':'DEMO FEED: synthetic candles only. Pocket Option live prices are NOT connected. '+(d.feed_status||'');document.getElementById('feedstatus').textContent=live?'POCKET OPTION LIVE CANDLES':'SYNTHETIC DEMO — NOT LIVE';document.getElementById('feedstatus').className=live?'good':'gold' }catch(e){document.getElementById('updated').textContent='API reconnecting'}}
 document.querySelectorAll('[data-tf]').forEach(b=>b.onclick=()=>{document.querySelectorAll('[data-tf]').forEach(x=>x.classList.remove('active'));b.classList.add('active');selectedTF=Number(b.dataset.tf);refresh()});document.getElementById('asset').onchange=refresh;initChart();refresh();setInterval(refresh,3000);
 </script></body></html>"""
