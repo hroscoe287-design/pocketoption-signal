@@ -187,7 +187,7 @@ def snapshot(tf=None, asset=None):
     score = trend + mom + rsi_bias + wt_cross
     signal = ("BUY" if score >= 3 else ("SELL" if score <= -3 else "WAIT")) if is_live else "WAIT"
     # Confluence index only; it is not a win probability.
-    strength = min(99, 59 + abs(score) * 10) if is_live else 0
+    strength = min(99, 60 + abs(score) * 10) if is_live else 0
     strength_label = "PERFECT" if strength >= 99 else ("AMAZING" if strength >= 90 else "TERRIFIC")
     candle_age = max(0, now - int(_bars[-1]["time"])) if is_live else 0
     age_fraction = min(1.0, candle_age / step) if is_live and step else 1.0
