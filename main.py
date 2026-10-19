@@ -155,6 +155,22 @@ def _fetch_po_bars_blocking(asset, timeframe):
             _po_status = "Pocket Option disconnected; live feed unavailable"
             _schedule_po_reconnect("client.check_connect() returned false")
             return None
+        # Resolve the user's selection against the broker's actual symbol catalog.
+        # This supports OTC crypto, metals, stocks and indices when the broker offers them,
+        # even if the UI's symbol capitalization differs from the feed's canonical name.
+        actual_asset = asset
+        try:
+            catalog = client.get_assets() or {}
+            catalog_symbols = list(catalog.keys()) if isinstance(catalog, dict) else list(catalog) if isinstance(catalog, (list, tuple, set)) else []
+            match = next((str(symbol) for symbol in catalog_symbols if str(symbol).strip().casefold() == asset.strip().casefold()), None)
+            if match:
+                actual_asset = match
+            elif catalog_symbols:
+                _po_status = f"Asset unavailable in connected Pocket Option catalog: {asset}"
+                return None
+        except Exception:
+            # Catalog lookup is best-effort; let the broker subscription validate the symbol.
+            pass
         try:
             if not client.is_time_synced():
                 _po_status = "Pocket Option connected; waiting for server time sync"
@@ -167,13 +183,13 @@ def _fetch_po_bars_blocking(asset, timeframe):
             logger.warning("Pocket Option subscribe failed for symbol=%s period=%s", asset, timeframe)
             return None
         # Avoid a fixed sleep on every refresh; this keeps the displayed feed responsive.
-        candles = client.get_historical_candles(asset, timeframe, offset=45000, count_request=1)
+        candles = client.get_historical_candles(actual_asset, timeframe, offset=45000, count_request=1)
         if not candles:
-            _po_status = f"Connected, but Pocket Option returned no history for {asset} ({timeframe}s)"
-            logger.warning("No historical candles returned for symbol=%s period=%s", asset, timeframe)
+            _po_status = f"Connected, but Pocket Option returned no history for {actual_asset} ({timeframe}s)"
+            logger.warning("No historical candles returned for symbol=%s period=%s", actual_asset, timeframe)
             # Use only genuine ticks as a fallback; never manufacture live data.
             try:
-                ticks = client.get_realtime_ticks(asset, limit=5000)
+                ticks = client.get_realtime_ticks(actual_asset, limit=5000)
                 buckets = {}
                 for ts, price in (ticks or []):
                     t, p = int(float(ts)), float(price)
@@ -192,7 +208,7 @@ def _fetch_po_bars_blocking(asset, timeframe):
                     _po_status = f"POCKET OPTION LIVE TICKS — {asset}"
                     return normalized
             except Exception:
-                logger.warning("Realtime tick fallback failed for symbol=%s", asset)
+                logger.warning("Realtime tick fallback failed for symbol=%s", actual_asset)
             return None
         normalized = []
         for b in candles:
@@ -205,8 +221,8 @@ def _fetch_po_bars_blocking(asset, timeframe):
         unique = {b["time"]: b for b in normalized}
         normalized = list(unique.values())[-120:]
         if len(normalized) < 2:
-            _po_status = f"Pocket Option returned only {len(normalized)} valid candles for {asset} ({timeframe}s)"
-            logger.warning("Insufficient valid bars: symbol=%s period=%s count=%s", asset, timeframe, len(normalized))
+            _po_status = f"Pocket Option returned only {len(normalized)} valid candles for {actual_asset} ({timeframe}s)"
+            logger.warning("Insufficient valid bars: symbol=%s period=%s count=%s", actual_asset, timeframe, len(normalized))
             return None
         _po_last_key, _po_last_fetch, _po_cached_bars = key, now, normalized
         _po_status = "POCKET OPTION LIVE CANDLES"
