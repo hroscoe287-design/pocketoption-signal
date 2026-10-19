@@ -94,14 +94,14 @@ class GodModeStrategy:
         if self.last_processed.get(key) == candle_time:
             base.update({"message":"Latest candle already evaluated; waiting for next candle close.",
                          "indicators":{"lower":lower[i],"upper":upper[i],"k":k[i],"d":d[i],"rsi":rsi[i]}})
-            base["signal"] = self.latest_signal.get(key)
+            base["signal"] = None
             return base
         self.last_processed[key] = candle_time
         prior_armed = self.armed.get(key)
         close = closes[i]
         inside = lower[i] <= close <= upper[i]
         signal = None
-        if prior_armed and prior_armed.get("index") == i-1 and inside and i >= 1:
+        if prior_armed and i >= 1 and str(valid[i-1]["time"]) == prior_armed.get("timestamp") and inside:
             bullish_cross = k[i-1] is not None and d[i-1] is not None and k[i] is not None and d[i] is not None and k[i-1] <= d[i-1] and k[i] > d[i] and k[i] < 20 and d[i] < 20
             bearish_cross = k[i-1] is not None and d[i-1] is not None and k[i] is not None and d[i] is not None and k[i-1] >= d[i-1] and k[i] < d[i] and k[i] > 80 and d[i] > 80
             rsi_up = rsi[i-1] is not None and rsi[i] is not None and rsi[i-1] < 30 and rsi[i] > rsi[i-1] and rsi[i] < 30
@@ -123,7 +123,7 @@ class GodModeStrategy:
                           "note":"Indicator confirmation only; not a probability or guarantee."}
                 self.latest_signal[key] = signal
         # Only the immediate next candle can qualify; arm from this candle for the next close.
-        self.armed[key] = {"side":"lower" if close < lower[i] else ("upper" if close > upper[i] else None),"index":i}
+        self.armed[key] = {"side":"lower" if close < lower[i] else ("upper" if close > upper[i] else None),"timestamp":candle_time}
         base.update({"signal":signal,"message":"Confirmed setup." if signal else "No confirmed setup on latest closed candle.",
                      "expiration_label":signal["expiration_label"] if signal else base["expiration_label"],
                      "indicators":{"lower":round(lower[i],8),"upper":round(upper[i],8),
