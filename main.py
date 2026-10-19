@@ -137,7 +137,7 @@ seed_bars()
 # Read-only connection: this service never calls order-placement methods.
 threading.Thread(target=_connect_po, daemon=True, name="po-market-feed").start()
 
-def _get_po_bars(asset, timeframe):
+def _fetch_po_bars_blocking(asset, timeframe):
     global _po_status, _po_last_fetch, _po_last_key, _po_cached_bars
     client = _po_client
     if client is None:
@@ -218,6 +218,49 @@ def _get_po_bars(asset, timeframe):
         if "connect" in str(e).lower() or "websocket" in str(e).lower() or "closed" in str(e).lower():
             _schedule_po_reconnect(type(e).__name__)
         return None
+
+
+# Keep browser/API requests responsive even when the broker WebSocket stalls.
+# The potentially blocking broker calls run in a single background refresh worker.
+_po_refresh_guard = threading.Lock()
+_po_refresh_in_progress = False
+_po_refresh_key = None
+_po_refresh_requested_at = 0.0
+
+def _refresh_po_bars_worker(asset, timeframe):
+    global _po_refresh_in_progress, _po_refresh_key
+    try:
+        _fetch_po_bars_blocking(asset, timeframe)
+    except Exception as exc:
+        logger.warning("Background market refresh failed (%s); dashboard remains responsive", type(exc).__name__)
+    finally:
+        with _po_refresh_guard:
+            _po_refresh_in_progress = False
+
+def _get_po_bars(asset, timeframe):
+    global _po_refresh_in_progress, _po_refresh_key, _po_refresh_requested_at
+    now = time.time()
+    key = (asset, timeframe)
+    with _po_refresh_guard:
+        # Never launch concurrent calls into the same broker client.
+        if not _po_refresh_in_progress and (
+            _po_refresh_key != key or now - _po_refresh_requested_at >= 3
+        ):
+            _po_refresh_in_progress = True
+            _po_refresh_key = key
+            _po_refresh_requested_at = now
+            threading.Thread(
+                target=_refresh_po_bars_worker,
+                args=(asset, timeframe),
+                daemon=True,
+                name="po-candle-refresh",
+            ).start()
+    # Return only recently verified broker bars; never label stale cache as live.
+    if _po_last_key == key and _po_cached_bars:
+        age = now - _po_last_fetch
+        if age <= max(10, timeframe * 2):
+            return _po_cached_bars
+    return None
 
 def ema(values, period):
     if not values: return []
