@@ -458,7 +458,80 @@ function renderGodmode(g){
 }
 
 function initChart(){const badge=document.getElementById('chartSignalBadge');chartEl.replaceChildren();chartEl.style.position='relative';candleCanvas=document.createElement('canvas');candleCanvas.id='candleCanvas';candleCanvas.setAttribute('aria-label','Candlestick price chart');Object.assign(candleCanvas.style,{display:'block',width:'100%',height:'100%',minHeight:'250px'});chartEl.appendChild(candleCanvas);if(badge)chartEl.appendChild(badge);if(window.ResizeObserver)new ResizeObserver(()=>requestAnimationFrame(()=>drawCandles(lastChartBars))).observe(chartEl);window.addEventListener('resize',()=>requestAnimationFrame(()=>drawCandles(lastChartBars)));requestAnimationFrame(()=>drawCandles([]))}
-function drawCandles(bars){if(!candleCanvas)return;lastChartBars=Array.isArray(bars)?bars:[];const rect=chartEl.getBoundingClientRect(),w=Math.max(300,Math.floor(rect.width)),h=Math.max(250,Math.floor(rect.height)),dpr=Math.max(1,window.devicePixelRatio||1);if(!rect.width||!rect.height){requestAnimationFrame(()=>drawCandles(lastChartBars));return}candleCanvas.style.width=w+'px';candleCanvas.style.height=h+'px';if(candleCanvas.width!==Math.floor(w*dpr)||candleCanvas.height!==Math.floor(h*dpr)){candleCanvas.width=Math.floor(w*dpr);candleCanvas.height=Math.floor(h*dpr)}const ctx=candleCanvas.getContext('2d');if(!ctx){document.getElementById('feedbanner').textContent='CHART ERROR: browser canvas unavailable';return}ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);ctx.fillStyle='#0d1320';ctx.fillRect(0,0,w,h);const pad={l:12,r:78,t:18,b:28},pw=Math.max(1,w-pad.l-pad.r),ph=Math.max(1,h-pad.t-pad.b);ctx.font='11px system-ui';ctx.strokeStyle='#26344b';ctx.lineWidth=1;for(let i=0;i<=5;i++){const y=pad.t+ph*i/5;ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(w-pad.r,y);ctx.stroke()}const valid=lastChartBars.filter(b=>[b.open,b.high,b.low,b.close].every(v=>Number.isFinite(Number(v)))&&Number(b.high)>=Number(b.low)).map(b=>({time:Number(b.time),open:Number(b.open),high:Number(b.high),low:Number(b.low),close:Number(b.close)}));if(!valid.length){ctx.fillStyle='#ffca67';ctx.textAlign='center';ctx.font='bold 14px system-ui';ctx.fillText('WAITING FOR VALID LIVE CANDLES',w/2,h/2-8);ctx.font='11px system-ui';ctx.fillStyle='#aab7cc';ctx.fillText('Chart will draw when the feed supplies OHLC data',w/2,h/2+14);return}let lo=Math.min(...valid.map(b=>b.low)),hi=Math.max(...valid.map(b=>b.high));if(!Number.isFinite(lo)||!Number.isFinite(hi))return;let range=hi-lo;if(range===0){range=Math.max(Math.abs(hi)*0.0002,0.00001);lo-=range/2;hi+=range/2}const yOf=v=>pad.t+(hi-v)/(hi-lo)*ph;ctx.fillStyle='#aab7cc';ctx.textAlign='left';for(let i=0;i<=5;i++){const v=hi-(hi-lo)*i/5;ctx.fillText(v.toFixed(6),w-pad.r+6,pad.t+ph*i/5+4)}const slot=pw/valid.length,bw=Math.max(2,Math.min(9,slot*.72));valid.forEach((b,i)=>{const x=pad.l+i*slot+slot/2,yo=yOf(b.open),yc=yOf(b.close),yh=yOf(b.high),yl=yOf(b.low),col=b.close>=b.open?'#23d6a0':'#ff5277';ctx.strokeStyle=col;ctx.fillStyle=col;ctx.lineWidth=Math.max(1,Math.min(2,slot*.18));ctx.beginPath();ctx.moveTo(x,yh);ctx.lineTo(x,yl);ctx.stroke();const top=Math.min(yo,yc),bh=Math.max(2,Math.abs(yc-yo));ctx.fillRect(x-bw/2,top,bw,bh)});ctx.fillStyle='#d4deee';ctx.textAlign='left';const first=new Date(valid[0].time*1000),last=new Date(valid[valid.length-1].time*1000);ctx.fillText(Number.isNaN(first.getTime())?'':first.toLocaleTimeString(),pad.l,h-8);ctx.textAlign='right';ctx.fillText(Number.isNaN(last.getTime())?'':last.toLocaleTimeString(),w-pad.r,h-8);}async function refresh(){try{const r=await fetch('/api/market?tf='+selectedTF+'&asset='+encodeURIComponent(document.getElementById('asset').value));const d=await r.json();renderGodmode(d.godmode);let chartBarCount=0;try{const raw=Array.isArray(d.bars)?d.bars:[];const clean=raw.map(b=>{let t=Number(b.time);while(t>1e11)t=Math.floor(t/1000);const o=Number(b.open),h=Number(b.high),l=Number(b.low),c=Number(b.close);return {time:Math.floor(t),open:o,high:h,low:l,close:c}}).filter(b=>Number.isSafeInteger(b.time)&&b.time>0&&[b.open,b.high,b.low,b.close].every(Number.isFinite)&&b.high>=Math.max(b.open,b.close,b.low)&&b.low<=Math.min(b.open,b.close,b.high)).sort((a,b)=>a.time-b.time);const unique=[...new Map(clean.map(b=>[b.time,b])).values()];chartBarCount=unique.length;drawCandles(unique);if(!unique.length)console.warn('No valid candle bars to draw; API bars:',raw.length);}catch(chartError){console.error('Candle chart rendering failed:',chartError);document.getElementById('feedbanner').textContent='CHART ERROR: '+(chartError.message||String(chartError));}
+function drawCandles(bars){
+ if(!candleCanvas)return;
+ lastChartBars=Array.isArray(bars)?bars:[];
+ const rect=chartEl.getBoundingClientRect(),w=Math.max(300,Math.floor(rect.width)),h=Math.max(250,Math.floor(rect.height)),dpr=Math.max(1,window.devicePixelRatio||1);
+ if(!rect.width||!rect.height){requestAnimationFrame(()=>drawCandles(lastChartBars));return}
+ candleCanvas.style.width=w+'px';candleCanvas.style.height=h+'px';
+ if(candleCanvas.width!==Math.floor(w*dpr)||candleCanvas.height!==Math.floor(h*dpr)){candleCanvas.width=Math.floor(w*dpr);candleCanvas.height=Math.floor(h*dpr)}
+ const ctx=candleCanvas.getContext('2d');if(!ctx){document.getElementById('feedbanner').textContent='CHART ERROR: browser canvas unavailable';return}
+ ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);ctx.fillStyle='#030609';ctx.fillRect(0,0,w,h);
+ const pad={l:12,r:78,t:18,b:28},pw=Math.max(1,w-pad.l-pad.r),ph=Math.max(1,h-pad.t-pad.b);
+ const valid=lastChartBars.filter(b=>[b.open,b.high,b.low,b.close].every(v=>Number.isFinite(Number(v)))&&Number(b.high)>=Number(b.low))
+ .map(b=>({time:Number(b.time),open:Number(b.open),high:Number(b.high),low:Number(b.low),close:Number(b.close)}));
+ ctx.font='11px system-ui';ctx.strokeStyle='#19232d';ctx.lineWidth=1;
+ for(let j=0;j<=5;j++){const y=pad.t+ph*j/5;ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(w-pad.r,y);ctx.stroke()}
+ if(!valid.length){ctx.fillStyle='#ffca67';ctx.textAlign='center';ctx.font='bold 14px system-ui';ctx.fillText('WAITING FOR LIVE CANDLES',w/2,h/2-8);ctx.font='11px system-ui';ctx.fillStyle='#aab7cc';ctx.fillText('The chart draws when the feed supplies OHLC data',w/2,h/2+14);return}
+ let lo=Math.min(...valid.map(b=>b.low)),hi=Math.max(...valid.map(b=>b.high));
+ if(!Number.isFinite(lo)||!Number.isFinite(hi))return;
+ // ATR-based Supertrend-style cloud, computed locally from the displayed OHLC candles.
+ const n=valid.length,atr=Array(n).fill(null),upper=Array(n).fill(null),lower=Array(n).fill(null),trend=Array(n).fill(1),line=Array(n).fill(null);
+ const tr=valid.map((b,i)=>i===0?b.high-b.low:Math.max(b.high-b.low,Math.abs(b.high-valid[i-1].close),Math.abs(b.low-valid[i-1].close)));
+ const period=10,mult=2.4;
+ for(let i=0;i<n;i++){
+   if(i<period-1){atr[i]=tr.slice(0,i+1).reduce((a,v)=>a+v,0)/(i+1)}
+   else if(i===period-1){atr[i]=tr.slice(i-period+1,i+1).reduce((a,v)=>a+v,0)/period}
+   else atr[i]=(atr[i-1]*(period-1)+tr[i])/period;
+   const mid=(valid[i].high+valid[i].low)/2,bu=mid+mult*atr[i],bl=mid-mult*atr[i];
+   upper[i]=(i&&bu>upper[i-1]&&valid[i-1].close<=upper[i-1])?upper[i-1]:bu;
+   lower[i]=(i&&bl<lower[i-1]&&valid[i-1].close>=lower[i-1])?lower[i-1]:bl;
+   if(i){if(trend[i-1]===1)trend[i]=valid[i].close<lower[i]? -1:1;else trend[i]=valid[i].close>upper[i]?1:-1}
+   line[i]=trend[i]===1?lower[i]:upper[i];
+ }
+ // Add breathing room so the cloud and candles do not touch the chart frame.
+ const rawRange=hi-lo||Math.max(Math.abs(hi)*.0002,.00001);lo-=rawRange*.08;hi+=rawRange*.08;
+ const yOf=v=>pad.t+(hi-v)/(hi-lo)*ph;
+ const slot=pw/valid.length,bw=Math.max(2,Math.min(9,slot*.68)),xOf=i=>pad.l+i*slot+slot/2;
+ // Soft red/teal trend cloud between price and the ATR trailing line.
+ for(let i=1;i<n;i++){
+   const up=trend[i]===1, color=up?'35,220,190':'255,75,42';
+   const x0=xOf(i-1),x1=xOf(i),p0=yOf(valid[i-1].close),p1=yOf(valid[i].close),l0=yOf(line[i-1]),l1=yOf(line[i]);
+   ctx.beginPath();ctx.moveTo(x0,p0);ctx.lineTo(x1,p1);ctx.lineTo(x1,l1);ctx.lineTo(x0,l0);ctx.closePath();
+   const grad=ctx.createLinearGradient(0,Math.min(p0,p1,l0,l1),0,Math.max(p0,p1,l0,l1));
+   grad.addColorStop(0,'rgba('+color+',0.50)');grad.addColorStop(1,'rgba('+color+',0.13)');
+   ctx.fillStyle=grad;ctx.fill();
+ }
+ // Draw the stepped trailing trend line on top of the cloud.
+ for(let i=1;i<n;i++){
+   ctx.strokeStyle=trend[i]===1?'#3be4c5':'#ff5b38';ctx.lineWidth=Math.max(2,Math.min(4,slot*.35));
+   ctx.beginPath();ctx.moveTo(xOf(i-1),yOf(line[i-1]));ctx.lineTo(xOf(i),yOf(line[i]));ctx.stroke();
+ }
+ // Recent swing zones, styled like the reference image; these are visual areas, not trade orders.
+ const zoneCount=Math.min(n,Math.max(12,Math.floor(n*.28))),recent=valid.slice(-zoneCount);
+ const swingHigh=Math.max(...recent.map(b=>b.high)),swingLow=Math.min(...recent.map(b=>b.low));
+ const zonePad=(hi-lo)*.035;
+ function zone(top,bottom,fill,stroke,label){
+   const y1=yOf(top),y2=yOf(bottom);ctx.fillStyle=fill;ctx.fillRect(pad.l,Math.min(y1,y2),pw,Math.max(2,Math.abs(y2-y1)));
+   ctx.strokeStyle=stroke;ctx.lineWidth=1;ctx.strokeRect(pad.l,Math.min(y1,y2),pw,Math.max(2,Math.abs(y2-y1)));
+   ctx.fillStyle=stroke;ctx.font='bold 10px system-ui';ctx.textAlign='left';ctx.fillText(label,w-pad.r+5,Math.max(12,Math.min(h-30,(y1+y2)/2)));
+ }
+ zone(swingHigh,swingHigh-zonePad,'rgba(255,54,65,.10)','#a93642','RESISTANCE');
+ zone(swingLow+zonePad,swingLow,'rgba(111,255,91,.08)','#5c9e54','SUPPORT');
+ // Candlesticks remain the foreground layer.
+ valid.forEach((b,i)=>{const x=xOf(i),yo=yOf(b.open),yc=yOf(b.close),yh=yOf(b.high),yl=yOf(b.low),col=b.close>=b.open?'#9bf8e4':'#ffbd39';
+   ctx.strokeStyle=col;ctx.fillStyle=col;ctx.lineWidth=Math.max(1,Math.min(2,slot*.18));
+   ctx.beginPath();ctx.moveTo(x,yh);ctx.lineTo(x,yl);ctx.stroke();
+   const top=Math.min(yo,yc),bh=Math.max(2,Math.abs(yc-yo));ctx.fillRect(x-bw/2,top,bw,bh);
+ });
+ // Price scale and timestamps.
+ ctx.fillStyle='#d4deee';ctx.textAlign='left';ctx.font='11px system-ui';
+ for(let j=0;j<=5;j++){const v=hi-(hi-lo)*j/5;ctx.fillText(v.toFixed(6),w-pad.r+6,pad.t+ph*j/5+4)}
+ const first=new Date(valid[0].time*1000),last=new Date(valid[valid.length-1].time*1000);
+ ctx.textAlign='left';ctx.fillText(Number.isNaN(first.getTime())?'':first.toLocaleTimeString(),pad.l,h-8);
+ ctx.textAlign='right';ctx.fillText(Number.isNaN(last.getTime())?'':last.toLocaleTimeString(),w-pad.r,h-8);
+}
+async function refresh(){try{const r=await fetch('/api/market?tf='+selectedTF+'&asset='+encodeURIComponent(document.getElementById('asset').value));const d=await r.json();renderGodmode(d.godmode);let chartBarCount=0;try{const raw=Array.isArray(d.bars)?d.bars:[];const clean=raw.map(b=>{let t=Number(b.time);while(t>1e11)t=Math.floor(t/1000);const o=Number(b.open),h=Number(b.high),l=Number(b.low),c=Number(b.close);return {time:Math.floor(t),open:o,high:h,low:l,close:c}}).filter(b=>Number.isSafeInteger(b.time)&&b.time>0&&[b.open,b.high,b.low,b.close].every(Number.isFinite)&&b.high>=Math.max(b.open,b.close,b.low)&&b.low<=Math.min(b.open,b.close,b.high)).sort((a,b)=>a.time-b.time);const unique=[...new Map(clean.map(b=>[b.time,b])).values()];chartBarCount=unique.length;drawCandles(unique);if(!unique.length)console.warn('No valid candle bars to draw; API bars:',raw.length);}catch(chartError){console.error('Candle chart rendering failed:',chartError);document.getElementById('feedbanner').textContent='CHART ERROR: '+(chartError.message||String(chartError));}
 const s=document.getElementById('signal');s.textContent=d.signal;s.className='signal '+d.signal;const exactPrice=d.price==null?'LIVE PRICE UNAVAILABLE':String(Number(d.price));document.getElementById('price').textContent=exactPrice;const badge=document.getElementById('chartSignalBadge');const liveSignal=d.data_mode==='POCKET OPTION LIVE CANDLES'||d.data_mode==='POCKET OPTION LIVE TICKS';const visibleSignal=liveSignal&&(d.signal==='BUY'||d.signal==='SELL')?d.signal:'WAIT';badge.className='chart-signal-badge '+(liveSignal?visibleSignal:'OFF');document.getElementById('chartSignalText').textContent=liveSignal?visibleSignal:'WAIT';document.getElementById('chartSignalPrice').textContent=liveSignal?exactPrice:'LIVE PRICE UNAVAILABLE';document.getElementById('assetname').textContent=d.asset+' • '+d.timeframe_seconds+'s candles';document.getElementById('confidence').textContent=d.confidence?d.confidence+'/100 strength':'—';const sl=document.getElementById('strengthLabel');sl.textContent=d.strength_label;sl.className='strength-banner '+d.strength_label;const es=document.getElementById('entryStatus');es.textContent=d.entry_status;es.className='entry-status '+(d.entry_status==='FRESH WINDOW'?'fresh':d.entry_status.includes('LATE')||d.entry_status==='FEED UNAVAILABLE'?'late':'');document.getElementById('meter').style.width=d.confidence+'%';document.getElementById('meter').style.background=d.signal==='SELL'?'#ff5277':d.signal==='BUY'?'#23d6a0':'#ffca67';document.getElementById('trend').textContent=d.trend;document.getElementById('trend').className='v '+(d.trend==='BULLISH'?'good':d.trend==='BEARISH'?'bad':'');document.getElementById('rsi').textContent=d.rsi==null?'—':d.rsi;document.getElementById('rsi').className='v '+(d.rsi!=null&&(d.rsi>70||d.rsi<30)?'gold':'');document.getElementById('macd').textContent=d.macd_bias;document.getElementById('macd').className='v '+(d.macd_bias==='BULLISH'?'good':d.macd_bias==='BEARISH'?'bad':'');document.getElementById('wt').textContent=d.wavetrend==null?'—':d.wavetrend+' / '+d.wavetrend_signal;document.getElementById('wt').className='v '+(d.wavetrend_bias==='BULLISH'?'good':d.wavetrend_bias==='BEARISH'?'bad':'');document.getElementById('wtevent').textContent=d.wavetrend_event;document.getElementById('score').textContent=(d.score>0?'+':'')+d.score;document.getElementById('updated').textContent=new Date(d.updated_at).toLocaleTimeString();const live=d.data_mode==='POCKET OPTION LIVE CANDLES',liveTicks=d.data_mode==='POCKET OPTION LIVE TICKS',liveVerified=live||liveTicks;document.getElementById('feedbanner').textContent=live?'POCKET OPTION LIVE CANDLES — '+chartBarCount+' candles rendered.':liveTicks?'POCKET OPTION LIVE TICKS — '+chartBarCount+' tick-built candles rendered. Read-only feed; no trades executed.':(chartBarCount?'DEMO / DIAGNOSTIC CANDLES — '+chartBarCount+' shown; NOT live Pocket Option prices. Signals disabled. ':'LIVE FEED UNAVAILABLE — 0 candles rendered. ')+(d.feed_status||'');document.getElementById('feedstatus').textContent=live?'POCKET OPTION LIVE CANDLES':liveTicks?'POCKET OPTION LIVE TICKS':'LIVE FEED UNAVAILABLE — DEMO CHART';document.getElementById('feedstatus').className=liveVerified?'good':'gold' }catch(e){document.getElementById('updated').textContent='API reconnecting';document.getElementById('feedbanner').textContent='API / CHART ERROR: '+(e.message||String(e));console.error('GODMODE refresh failed:',e)}}
 document.querySelectorAll('[data-tf]').forEach(b=>b.onclick=()=>{document.querySelectorAll('[data-tf]').forEach(x=>x.classList.remove('active'));b.classList.add('active');selectedTF=Number(b.dataset.tf);refresh()});async function loadBrokerAssets(){try{const r=await fetch('/api/assets');const d=await r.json();if(!Array.isArray(d.assets)||!d.assets.length)return;const select=document.getElementById('asset');const existing=new Set([...select.options].map(o=>o.value.toLowerCase()));let group=select.querySelector('optgroup[data-broker-assets="true"]');if(!group){group=document.createElement('optgroup');group.label='Pocket Option Broker Catalog';group.dataset.brokerAssets='true';select.appendChild(group)}for(const symbol of d.assets){if(!existing.has(String(symbol).toLowerCase())){const opt=document.createElement('option');opt.value=String(symbol);opt.textContent=String(symbol);group.appendChild(opt);existing.add(String(symbol).toLowerCase())}}}catch(e){console.warn('Broker asset catalog unavailable',e)}}document.getElementById('asset').onchange=refresh;initChart();loadBrokerAssets();refresh();setInterval(refresh,3000);setInterval(loadBrokerAssets,60000);
 </script></body></html>"""
