@@ -178,9 +178,9 @@ def _fetch_po_bars_blocking(asset, timeframe):
         except Exception:
             _po_status = "Pocket Option server time sync unavailable"
             return None
-        if not client.subscribe(asset, period=timeframe):
-            _po_status = f"Pocket Option subscription failed for {asset}"
-            logger.warning("Pocket Option subscribe failed for symbol=%s period=%s", asset, timeframe)
+        if not client.subscribe(actual_asset, period=timeframe):
+            _po_status = f"Pocket Option subscription failed for {actual_asset}"
+            logger.warning("Pocket Option subscribe failed for symbol=%s period=%s", actual_asset, timeframe)
             return None
         # Avoid a fixed sleep on every refresh; this keeps the displayed feed responsive.
         candles = client.get_historical_candles(actual_asset, timeframe, offset=45000, count_request=1)
@@ -237,40 +237,59 @@ def _fetch_po_bars_blocking(asset, timeframe):
 
 
 # Keep browser/API requests responsive even when the broker WebSocket stalls.
-# The potentially blocking broker calls run in a single background refresh worker.
+# A watchdog invalidates a worker that hangs inside the broker library and rebuilds
+# the client. Each worker has a generation token so a timed-out thread cannot clear
+# the in-progress flag belonging to a newer worker.
 _po_refresh_guard = threading.Lock()
 _po_refresh_in_progress = False
 _po_refresh_key = None
 _po_refresh_requested_at = 0.0
+_po_refresh_started_at = 0.0
+_po_refresh_generation = 0
+_PO_REFRESH_WATCHDOG_SECONDS = 8.0
 
-def _refresh_po_bars_worker(asset, timeframe):
-    global _po_refresh_in_progress, _po_refresh_key
+def _refresh_po_bars_worker(asset, timeframe, generation):
+    global _po_refresh_in_progress
     try:
         _fetch_po_bars_blocking(asset, timeframe)
     except Exception as exc:
         logger.warning("Background market refresh failed (%s); dashboard remains responsive", type(exc).__name__)
     finally:
         with _po_refresh_guard:
-            _po_refresh_in_progress = False
+            if generation == _po_refresh_generation:
+                _po_refresh_in_progress = False
 
 def _get_po_bars(asset, timeframe):
     global _po_refresh_in_progress, _po_refresh_key, _po_refresh_requested_at
+    global _po_refresh_started_at, _po_refresh_generation
     now = time.time()
     key = (asset, timeframe)
+    reconnect_for_stall = False
     with _po_refresh_guard:
-        # Never launch concurrent calls into the same broker client.
+        # Do not let a stuck library call permanently block every future chart refresh.
+        if _po_refresh_in_progress and _po_refresh_started_at and now - _po_refresh_started_at > _PO_REFRESH_WATCHDOG_SECONDS:
+            logger.warning("Pocket Option market refresh exceeded %.1fs; invalidating stalled worker", _PO_REFRESH_WATCHDOG_SECONDS)
+            _po_refresh_generation += 1
+            _po_refresh_in_progress = False
+            _po_refresh_started_at = 0.0
+            reconnect_for_stall = True
         if not _po_refresh_in_progress and (
             _po_refresh_key != key or now - _po_refresh_requested_at >= 0.75
         ):
+            _po_refresh_generation += 1
+            generation = _po_refresh_generation
             _po_refresh_in_progress = True
             _po_refresh_key = key
             _po_refresh_requested_at = now
+            _po_refresh_started_at = now
             threading.Thread(
                 target=_refresh_po_bars_worker,
-                args=(asset, timeframe),
+                args=(asset, timeframe, generation),
                 daemon=True,
                 name="po-candle-refresh",
             ).start()
+    if reconnect_for_stall:
+        _schedule_po_reconnect("market refresh watchdog timeout")
     # Return only recently verified broker bars; never label stale cache as live.
     if _po_last_key == key and _po_cached_bars:
         age = now - _po_last_fetch
