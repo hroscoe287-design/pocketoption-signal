@@ -506,7 +506,7 @@ def snapshot(tf=None, asset=None):
         "hybrid_engine": hybrid,
         "enhancement_indicators": extra.get("components", {}) if is_live else {},
         "squeeze_context": bool(extra.get("components", {}).get("squeeze", False)) if is_live else False,
-        "bars": _bars[-120:],  # Live bars when verified; otherwise clearly labeled local demo candles for chart diagnostics.
+        "bars": _bars[-120:] if is_live else [],  # Never draw seeded/demo candles as if they were the live market.
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "data_mode": ("POCKET OPTION LIVE CANDLES" if is_live and _po_status == "POCKET OPTION LIVE CANDLES" else ("POCKET OPTION LIVE TICKS" if is_live and _po_status.startswith("POCKET OPTION LIVE TICKS") else "LIVE FEED UNAVAILABLE — NO SYNTHETIC DATA SHOWN")),
         "feed_status": _po_status,
