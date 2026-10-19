@@ -17,6 +17,13 @@ _po_last_fetch = 0.0
 _po_last_key = None
 _po_cached_bars = []
 _po_connect_started = False
+# Separate broker-history polling from feed freshness. Repeatedly requesting
+# full history on every browser poll can stall the unofficial broker connection.
+_po_last_history_fetch = 0.0
+_po_last_tick_signature = {}
+_po_last_tick_received_at = {}
+_PO_HISTORY_POLL_SECONDS = 3.0
+_PO_TICK_STALE_SECONDS = 15.0
 
 def _auth_wire_value():
     raw = os.getenv("PO_AUTH_JSON", "").strip()
@@ -146,10 +153,9 @@ def _fetch_po_bars_blocking(asset, timeframe):
         if _auth_wire_value():
             _schedule_po_reconnect("no active Pocket Option client")
         return None
+    global _po_last_history_fetch
     key = (asset, timeframe)
     now = time.time()
-    if key == _po_last_key and now - _po_last_fetch < 0.35 and _po_cached_bars:
-        return _po_cached_bars
     try:
         if not client.check_connect():
             _po_status = "Pocket Option disconnected; live feed unavailable"
@@ -182,7 +188,69 @@ def _fetch_po_bars_blocking(asset, timeframe):
             _po_status = f"Pocket Option subscription failed for {actual_asset}"
             logger.warning("Pocket Option subscribe failed for symbol=%s period=%s", actual_asset, timeframe)
             return None
-        # Avoid a fixed sleep on every refresh; this keeps the displayed feed responsive.
+
+        # Treat incoming ticks as the feed heartbeat. A WebSocket can claim to be
+        # connected while no market messages arrive, so check message freshness too.
+        ticks = []
+        try:
+            ticks = client.get_realtime_ticks(actual_asset, limit=5000) or []
+        except Exception:
+            ticks = []
+        if ticks:
+            try:
+                last_ts, last_price = ticks[-1]
+                signature = (str(last_ts), float(last_price))
+                if _po_last_tick_signature.get(key) != signature:
+                    _po_last_tick_signature[key] = signature
+                    _po_last_tick_received_at[key] = now
+            except (TypeError, ValueError, IndexError):
+                pass
+        last_tick_at = _po_last_tick_received_at.get(key)
+        if last_tick_at is not None and now - last_tick_at > _PO_TICK_STALE_SECONDS:
+            _po_status = f"Pocket Option feed silent for {int(now - last_tick_at)}s; reconnecting"
+            _schedule_po_reconnect("connected WebSocket stopped delivering new ticks")
+            return None
+
+        # Don't hammer the history endpoint at browser-poll speed. Refresh the
+        # history snapshot every 3 seconds and use genuine streaming ticks between
+        # history requests to keep the currently forming candle moving.
+        if key == _po_last_key and _po_cached_bars and now - _po_last_history_fetch < _PO_HISTORY_POLL_SECONDS:
+            updated = [dict(bar) for bar in _po_cached_bars]
+            try:
+                buckets = {}
+                for ts, price in ticks:
+                    t, p = int(float(ts)), float(price)
+                    bucket = (t // timeframe) * timeframe
+                    bar = buckets.get(bucket)
+                    if bar is None:
+                        buckets[bucket] = {"time": bucket, "open": p, "high": p, "low": p, "close": p}
+                    else:
+                        bar["high"] = max(bar["high"], p)
+                        bar["low"] = min(bar["low"], p)
+                        bar["close"] = p
+                for tick_bar in sorted(buckets.values(), key=lambda b: b["time"]):
+                    if tick_bar["time"] < updated[-1]["time"]:
+                        continue
+                    if tick_bar["time"] == updated[-1]["time"]:
+                        updated[-1]["high"] = max(updated[-1]["high"], tick_bar["high"])
+                        updated[-1]["low"] = min(updated[-1]["low"], tick_bar["low"])
+                        updated[-1]["close"] = tick_bar["close"]
+                    else:
+                        updated.append(tick_bar)
+                updated = updated[-120:]
+                if updated:
+                    _po_cached_bars = updated
+                    _po_last_fetch = now
+                    _po_status = f"POCKET OPTION LIVE TICKS — {actual_asset}"
+                    return updated
+            except (TypeError, ValueError, IndexError, KeyError):
+                pass
+            # If there are no recent ticks, return only a still-fresh verified cache.
+            if now - _po_last_fetch <= max(10, timeframe * 2):
+                return _po_cached_bars
+
+        # Historical snapshots are for bootstrapping and gap correction, not every UI poll.
+        _po_last_history_fetch = now
         candles = client.get_historical_candles(actual_asset, timeframe, offset=45000, count_request=1)
         if not candles:
             _po_status = f"Connected, but Pocket Option returned no history for {actual_asset} ({timeframe}s)"
