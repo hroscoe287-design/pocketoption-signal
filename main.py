@@ -273,7 +273,7 @@ def _get_po_bars(asset, timeframe):
             _po_refresh_in_progress = False
             _po_refresh_started_at = 0.0
             reconnect_for_stall = True
-        if not _po_refresh_in_progress and (
+        if not reconnect_for_stall and not _po_refresh_in_progress and (
             _po_refresh_key != key or now - _po_refresh_requested_at >= 0.75
         ):
             _po_refresh_generation += 1
