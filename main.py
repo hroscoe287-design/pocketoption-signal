@@ -24,7 +24,7 @@ _po_last_tick_signature = {}
 _po_last_tick_received_at = {}
 _po_subscription_started_at = {}
 _po_subscribed_keys = set()
-_PO_HISTORY_POLL_SECONDS = 1.5
+_PO_HISTORY_POLL_SECONDS = 1.0
 _PO_TICK_STALE_SECONDS = 15.0
 
 def _auth_wire_value():
@@ -393,7 +393,7 @@ def _get_po_bars(asset, timeframe):
             _po_refresh_started_at = 0.0
             reconnect_for_stall = True
         if not reconnect_for_stall and not _po_refresh_in_progress and (
-            _po_refresh_key != key or now - _po_refresh_requested_at >= 0.4
+            _po_refresh_key != key or now - _po_refresh_requested_at >= 0.3
         ):
             _po_refresh_generation += 1
             generation = _po_refresh_generation
