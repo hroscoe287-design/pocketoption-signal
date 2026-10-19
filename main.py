@@ -22,6 +22,8 @@ _po_connect_started = False
 _po_last_history_fetch = 0.0
 _po_last_tick_signature = {}
 _po_last_tick_received_at = {}
+_po_subscription_started_at = {}
+_po_subscribed_keys = set()
 _PO_HISTORY_POLL_SECONDS = 3.0
 _PO_TICK_STALE_SECONDS = 15.0
 
@@ -82,7 +84,14 @@ def _connect_po():
             except Exception:
                 pass
             time.sleep(0.25)
-        _po_client = client
+        # A fresh client has no active market subscriptions or valid tick heartbeat.
+        global _po_subscribed_keys, _po_subscription_started_at, _po_last_tick_signature, _po_last_tick_received_at
+        with _po_lock:
+            _po_client = client
+            _po_subscribed_keys.clear()
+            _po_subscription_started_at.clear()
+            _po_last_tick_signature.clear()
+            _po_last_tick_received_at.clear()
         try:
             synced = bool(client.is_time_synced())
         except Exception:
@@ -98,6 +107,26 @@ def _connect_po():
 
 _po_last_reconnect_attempt = 0.0
 
+def _disconnect_then_reconnect(old_client):
+    """Close the dead socket before creating a replacement client."""
+    if old_client is not None:
+        try:
+            close_fn = getattr(old_client, "disconnect_websocket", None)
+            if callable(close_fn):
+                try:
+                    close_fn(timeout=3.0)
+                except TypeError:
+                    close_fn()
+        except Exception as exc:
+            logger.info("Old Pocket Option client cleanup failed (%s); continuing reconnect", type(exc).__name__)
+    with _po_lock:
+        # Release the connection-start guard only after old-client cleanup, so a
+        # chart request cannot create a competing connection during teardown.
+        global _po_connect_started
+        _po_connect_started = False
+    _connect_po()
+
+
 def _schedule_po_reconnect(reason):
     """Recreate a stale broker client with a cooldown; never place trades."""
     global _po_client, _po_status, _po_connect_started, _po_last_reconnect_attempt
@@ -106,11 +135,22 @@ def _schedule_po_reconnect(reason):
         if now - _po_last_reconnect_attempt < 15:
             return
         _po_last_reconnect_attempt = now
+        old_client = _po_client
         _po_client = None
-        _po_connect_started = False
+        # Reserve the connection guard while the old socket is being closed.
+        _po_connect_started = True
+        _po_subscribed_keys.clear()
+        _po_subscription_started_at.clear()
+        _po_last_tick_signature.clear()
+        _po_last_tick_received_at.clear()
         _po_status = "Pocket Option connection lost; reconnecting; live feed unavailable"
     logger.warning("Scheduling read-only Pocket Option reconnect: %s", reason)
-    threading.Thread(target=_connect_po, daemon=True, name="po-market-reconnect").start()
+    threading.Thread(
+        target=_disconnect_then_reconnect,
+        args=(old_client,),
+        daemon=True,
+        name="po-market-reconnect",
+    ).start()
 
 app = FastAPI(title="Godmode V4 Pocket Option Signal Lab")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -184,10 +224,17 @@ def _fetch_po_bars_blocking(asset, timeframe):
         except Exception:
             _po_status = "Pocket Option server time sync unavailable"
             return None
-        if not client.subscribe(actual_asset, period=timeframe):
-            _po_status = f"Pocket Option subscription failed for {actual_asset}"
-            logger.warning("Pocket Option subscribe failed for symbol=%s period=%s", actual_asset, timeframe)
-            return None
+        # Subscribe once per asset/timeframe per client. Calling subscribe on every
+        # browser poll can flood the unofficial API and destabilize its WebSocket.
+        subscription_key = (actual_asset, timeframe)
+        if subscription_key not in _po_subscribed_keys:
+            if not client.subscribe(actual_asset, period=timeframe):
+                _po_status = f"Pocket Option subscription failed for {actual_asset}"
+                logger.warning("Pocket Option subscribe failed for symbol=%s period=%s", actual_asset, timeframe)
+                _schedule_po_reconnect("subscription failed: no active or usable WebSocket")
+                return None
+            _po_subscribed_keys.add(subscription_key)
+            _po_subscription_started_at[key] = now
 
         # Treat incoming ticks as the feed heartbeat. A WebSocket can claim to be
         # connected while no market messages arrive, so check message freshness too.
@@ -206,9 +253,13 @@ def _fetch_po_bars_blocking(asset, timeframe):
             except (TypeError, ValueError, IndexError):
                 pass
         last_tick_at = _po_last_tick_received_at.get(key)
-        if last_tick_at is not None and now - last_tick_at > _PO_TICK_STALE_SECONDS:
-            _po_status = f"Pocket Option feed silent for {int(now - last_tick_at)}s; reconnecting"
-            _schedule_po_reconnect("connected WebSocket stopped delivering new ticks")
+        # Also detect the case where the subscription never delivered even its
+        # first tick; previously that case could remain stuck indefinitely.
+        heartbeat_started = last_tick_at or _po_subscription_started_at.get(key)
+        if heartbeat_started is not None and now - heartbeat_started > _PO_TICK_STALE_SECONDS:
+            silent_for = int(now - heartbeat_started)
+            _po_status = f"Pocket Option feed silent for {silent_for}s; reconnecting"
+            _schedule_po_reconnect("market subscription delivered no fresh ticks")
             return None
 
         # Don't hammer the history endpoint at browser-poll speed. Refresh the
