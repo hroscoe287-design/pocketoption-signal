@@ -6,8 +6,10 @@ import math, random, os, json, threading, time, logging
 
 from godmode_strategy import GodModeStrategy
 from godmode_enhancements import analyze as analyze_enhancements
+from hybrid_engine import CombinedEngine
 
 _godmode_engine = GodModeStrategy()
+_hybrid_engine = CombinedEngine()
 
 
 logger = logging.getLogger("godmode.po")
@@ -475,6 +477,9 @@ def snapshot(tf=None, asset=None):
     score = base_score + (1 if extra_vote >= 2 else (-1 if extra_vote <= -2 else 0))
     aligned = (trend > 0 and extra_vote >= 1) if score > 0 else (trend < 0 and extra_vote <= -1)
     signal = ("BUY" if score >= 3 and aligned else ("SELL" if score <= -3 and aligned else "WAIT")) if is_live else "WAIT"
+    # The hybrid engine gates GODMODE confluence through SONIC WIDE X + confirmed Fractal-3 + DI alignment.
+    hybrid = _hybrid_engine.evaluate(_bars, ASSET, step, is_live, signal, score)
+    signal = hybrid["signal"]
     # Transparent confluence index only; it is not a win probability.
     strength = min(99, 55 + abs(base_score) * 7 + min(14, abs(extra_vote) * 2)) if is_live else 0
     strength_label = "PERFECT" if strength >= 99 else ("AMAZING" if strength >= 90 else "TERRIFIC")
@@ -498,6 +503,7 @@ def snapshot(tf=None, asset=None):
         "wavetrend_event": wt_event if is_live else "NO LIVE DATA",
         "base_score": base_score if is_live else 0,
         "enhancement_vote": extra_vote if is_live else 0,
+        "hybrid_engine": hybrid,
         "enhancement_indicators": extra.get("components", {}) if is_live else {},
         "squeeze_context": bool(extra.get("components", {}).get("squeeze", False)) if is_live else False,
         "bars": _bars[-120:],  # Live bars when verified; otherwise clearly labeled local demo candles for chart diagnostics.
