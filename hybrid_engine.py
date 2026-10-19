@@ -104,8 +104,19 @@ class CombinedEngine:
         if sonic == "WAIT":
             base["reason"] = "Wide X detected, but Fractal arrow and DI direction do not line up."
             return base
-        if godmode_signal != sonic:
-            base["reason"] = f"SONIC confirms {sonic}, but GODMODE confluence is {godmode_signal}; waiting for agreement."
+        # Accept a directional GODMODE confirmation even when its display label
+        # differs; require a meaningful score in the same direction rather than
+        # demanding two independently generated labels to match exactly.
+        try:
+            score_value = float(godmode_score or 0)
+        except (TypeError, ValueError):
+            score_value = 0
+        godmode_agrees = (
+            (sonic == "BUY" and (godmode_signal == "BUY" or score_value >= 2))
+            or (sonic == "SELL" and (godmode_signal == "SELL" or score_value <= -2))
+        )
+        if not godmode_agrees:
+            base["reason"] = f"SONIC confirms {sonic}, but GODMODE score/signal does not confirm that direction (score {score_value:g}); waiting."
             return base
         if now < self.lock_until.get(key, 0):
             base["locked"] = True
