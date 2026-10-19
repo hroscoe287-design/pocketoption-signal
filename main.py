@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import math, random, os, json, threading, time, logging
 
 from godmode_strategy import GodModeStrategy
+from godmode_enhancements import analyze as analyze_enhancements
 
 _godmode_engine = GodModeStrategy()
 
@@ -467,10 +468,15 @@ def snapshot(tf=None, asset=None):
     trend = 1 if fast[-1] > slow[-1] else -1
     mom = 1 if macd_line[-1] > macd_signal[-1] else -1
     rsi_bias = 1 if rv >= 52 else (-1 if rv <= 48 else 0)
-    score = trend + mom + rsi_bias + wt_cross
-    signal = ("BUY" if score >= 3 else ("SELL" if score <= -3 else "WAIT")) if is_live else "WAIT"
-    # Confluence index only; it is not a win probability.
-    strength = min(99, 60 + abs(score) * 10) if is_live else 0
+    base_score = trend + mom + rsi_bias + wt_cross
+    extra = analyze_enhancements(_bars)
+    extra_vote = int(extra.get("vote", 0)) if extra.get("ready") else 0
+    # Extra indicators confirm or veto the base Godmode-family signal; they are not win probabilities.
+    score = base_score + (1 if extra_vote >= 2 else (-1 if extra_vote <= -2 else 0))
+    aligned = (trend > 0 and extra_vote >= 1) if score > 0 else (trend < 0 and extra_vote <= -1)
+    signal = ("BUY" if score >= 3 and aligned else ("SELL" if score <= -3 and aligned else "WAIT")) if is_live else "WAIT"
+    # Transparent confluence index only; it is not a win probability.
+    strength = min(99, 55 + abs(base_score) * 7 + min(14, abs(extra_vote) * 2)) if is_live else 0
     strength_label = "PERFECT" if strength >= 99 else ("AMAZING" if strength >= 90 else "TERRIFIC")
     candle_age = max(0, now - int(_bars[-1]["time"])) if is_live else 0
     age_fraction = min(1.0, candle_age / step) if is_live and step else 1.0
@@ -490,6 +496,10 @@ def snapshot(tf=None, asset=None):
         "wavetrend_signal": round(wt2[-1], 2) if is_live else None,
         "wavetrend_bias": ("BULLISH" if wt_cross > 0 else "BEARISH") if is_live else "UNAVAILABLE",
         "wavetrend_event": wt_event if is_live else "NO LIVE DATA",
+        "base_score": base_score if is_live else 0,
+        "enhancement_vote": extra_vote if is_live else 0,
+        "enhancement_indicators": extra.get("components", {}) if is_live else {},
+        "squeeze_context": bool(extra.get("components", {}).get("squeeze", False)) if is_live else False,
         "bars": _bars[-120:],  # Live bars when verified; otherwise clearly labeled local demo candles for chart diagnostics.
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "data_mode": ("POCKET OPTION LIVE CANDLES" if is_live and _po_status == "POCKET OPTION LIVE CANDLES" else ("POCKET OPTION LIVE TICKS" if is_live and _po_status.startswith("POCKET OPTION LIVE TICKS") else "LIVE FEED UNAVAILABLE — NO SYNTHETIC DATA SHOWN")),
