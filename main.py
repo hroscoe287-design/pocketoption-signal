@@ -510,7 +510,7 @@ def snapshot(tf=None, asset=None):
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "data_mode": ("POCKET OPTION LIVE CANDLES" if is_live and _po_status == "POCKET OPTION LIVE CANDLES" else ("POCKET OPTION LIVE TICKS" if is_live and _po_status.startswith("POCKET OPTION LIVE TICKS") else "LIVE FEED UNAVAILABLE — NO SYNTHETIC DATA SHOWN")),
         "feed_status": _po_status,
-        "godmode": _godmode_engine.update(_bars, ASSET, step, is_live)
+        "godmode": {**_godmode_engine.update(_bars, ASSET, step, is_live), "signal": signal, "hybrid_engine": hybrid}
     }
 
 @app.get("/api/market")
