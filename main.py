@@ -477,11 +477,12 @@ def snapshot(tf=None, asset=None):
     score = base_score + (1 if extra_vote >= 2 else (-1 if extra_vote <= -2 else 0))
     aligned = (trend > 0 and extra_vote >= 1) if score > 0 else (trend < 0 and extra_vote <= -1)
     signal = ("BUY" if score >= 3 and aligned else ("SELL" if score <= -3 and aligned else "WAIT")) if is_live else "WAIT"
-    # The hybrid engine gates GODMODE confluence through SONIC WIDE X + confirmed Fractal-3 + DI alignment.
+    # GODMODE owns the signal. SONIC is a confirmation checklist, never a veto.
     hybrid = _hybrid_engine.evaluate(_bars, ASSET, step, is_live, signal, score)
     signal = hybrid["signal"]
-    # Transparent confluence index only; it is not a win probability.
-    strength = min(99, 55 + abs(base_score) * 7 + min(14, abs(extra_vote) * 2)) if is_live else 0
+    # Strength is a heuristic confluence score, NOT a measured win probability.
+    strength = min(99, 55 + abs(base_score) * 7 + min(14, abs(extra_vote) * 2)) if is_live and signal != "WAIT" else 0
+    strength = max(1, min(99, strength + int(hybrid.get("confirmation_adjustment", 0)))) if signal != "WAIT" and is_live else 0
     strength_label = "PERFECT" if strength >= 99 else ("AMAZING" if strength >= 90 else "TERRIFIC")
     candle_age = max(0, now - int(_bars[-1]["time"])) if is_live else 0
     age_fraction = min(1.0, candle_age / step) if is_live and step else 1.0
