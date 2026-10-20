@@ -155,6 +155,32 @@ def _schedule_po_reconnect(reason):
         name="po-market-reconnect",
     ).start()
 
+# Retry the broker connection independently of browser polling. This matters when
+# DNS or broker endpoints are temporarily unavailable: the chart should recover
+# on its own as soon as a server becomes reachable.
+_PO_RECONNECT_RETRY_SECONDS = 20.0
+
+def _po_connection_supervisor():
+    """Keep attempting read-only feed recovery while never fabricating candles."""
+    while True:
+        try:
+            client = _po_client
+            if client is None:
+                if _auth_wire_value():
+                    _connect_po()
+            else:
+                try:
+                    if not client.check_connect():
+                        _schedule_po_reconnect("supervisor detected disconnected WebSocket")
+                except Exception as exc:
+                    logger.warning("Pocket Option connection health check failed (%s)", type(exc).__name__)
+                    _schedule_po_reconnect("supervisor health check raised an exception")
+        except Exception as exc:
+            # A supervisor error must not permanently disable later retries.
+            logger.warning("Pocket Option reconnect supervisor recovered from %s", type(exc).__name__)
+        time.sleep(_PO_RECONNECT_RETRY_SECONDS)
+
+
 app = FastAPI(title="Godmode V4 Pocket Option Signal Lab")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -185,7 +211,7 @@ def seed_bars():
 seed_bars()
 
 # Read-only connection: this service never calls order-placement methods.
-threading.Thread(target=_connect_po, daemon=True, name="po-market-feed").start()
+threading.Thread(target=_po_connection_supervisor, daemon=True, name="po-market-feed-supervisor").start()
 
 def _fetch_po_bars_blocking(asset, timeframe):
     global _po_status, _po_last_fetch, _po_last_key, _po_cached_bars
