@@ -1,8 +1,6 @@
-"""GODMODE-primary signal engine with SONIC X-quality confirmation.
+"""SONIC-primary signal engine with lightweight GODMODE confirmation.
 
-Signal-only: never places orders. SONIC grades the DI crossover, warns about weak/
-fake-out-prone X patterns, and adjusts a confluence-strength score without vetoing
-an otherwise valid live GODMODE signal.
+Signal-only: SONIC Fractal-3 and +DI/-DI lead direction; GODMODE is secondary.
 """
 from __future__ import annotations
 import time
@@ -73,7 +71,7 @@ class CombinedEngine:
         expiration = max(5, int(timeframe_seconds) * 2)
         godmode = godmode_signal if godmode_signal in ("BUY", "SELL") else "WAIT"
         base = {
-            "signal": godmode, "godmode_signal": godmode, "sonic_signal": "WAIT",
+            "signal": "WAIT", "godmode_signal": godmode, "sonic_signal": "WAIT",
             "wide_x": False, "x_status": "UNAVAILABLE", "x_quality": 0,
             "fakeout_risk": "UNKNOWN", "fractal_arrow": None,
             "plus_di": None, "minus_di": None, "adx": None,
@@ -81,8 +79,9 @@ class CombinedEngine:
             "alert_eligible": False, "agreement": "UNAVAILABLE",
             "confirmation_level": "GODMODE ONLY" if godmode != "WAIT" else "WAIT",
             "confirmation_adjustment": 0, "x_quality_adjustment": 0,
-            "engine": "GODMODE PRIMARY + SONIC X-QUALITY CHECKLIST",
-            "reason": "SONIC grades confirmation strength; it does not veto GODMODE."
+            "plus_di_boxes": 0, "minus_di_boxes": 0, "di_box_ratio": "0:0",
+            "engine": "SONIC PRIMARY + LIGHT GODMODE CONFIRMATION",
+            "reason": "SONIC Fractal-3 and DI-box majority lead; GODMODE is secondary confirmation."
         }
         if not live:
             base.update(signal="WAIT", godmode_signal="WAIT", confirmation_level="WAIT",
@@ -133,8 +132,13 @@ class CombinedEngine:
             elif fractal["arrow"] == "DOWN" and plus > minus:
                 sonic = "BUY"
 
+        total_di = max(1e-9, plus + minus)
+        plus_boxes = max(0, min(5, int(round(5 * plus / total_di))))
+        minus_boxes = 5 - plus_boxes
         base.update({
             "sonic_signal": sonic, "wide_x": bool(wide),
+            "plus_di_boxes": plus_boxes, "minus_di_boxes": minus_boxes,
+            "di_box_ratio": f"{plus_boxes}:{minus_boxes}",
             "x_status": x_status, "x_quality": x_quality, "fakeout_risk": fakeout_risk,
             "x_gap_expanding": bool(widening), "dominant_di_rising": bool(dominant_rising),
             "adx_rising": bool(adx_rising),
@@ -145,34 +149,32 @@ class CombinedEngine:
             "di_gap": round(gap, 2), "di_gap_previous": round(prior_gap, 2),
             "signal": godmode, "godmode_signal": godmode,
         })
-        if godmode == "WAIT":
-            base.update(confirmation_level="WAIT", agreement="NO GODMODE SIGNAL",
-                        reason="No GODMODE signal; SONIC alone cannot create a trade signal.")
+        # SONIC leads. GODMODE is only a lightweight confirmation.
+        if sonic == "WAIT":
+            base.update(signal="WAIT", confirmation_level="WAIT",
+                        agreement="SONIC NOT CONFIRMED",
+                        reason=f"SONIC needs confirmed Fractal-3 direction and DI dominance. {x_status}; GODMODE is secondary only.")
             return base
-        if sonic == godmode and strong_x:
-            base["agreement"] = "STRONG AGREE"
-            base["confirmation_level"] = "STRONG CONFLUENCE"
-            base["confirmation_adjustment"] = 8
-            base["x_quality_adjustment"] = 8
-            base["reason"] = f"GODMODE {godmode} and SONIC {sonic} agree; DI gap is widening, dominant DI is rising, and ADX confirms trend strength."
-        elif sonic == godmode:
-            base["agreement"] = "AGREE — X QUALITY CAUTION"
-            base["confirmation_level"] = "AGREE, BUT X NOT STRONG"
-            base["confirmation_adjustment"] = 5
-            base["x_quality_adjustment"] = -4
-            base["reason"] = f"GODMODE and SONIC both say {godmode}, but the X is not fully strengthening ({x_status}); keep the signal, reduce strength."
-        elif sonic == "WAIT":
-            base["agreement"] = "PARTIAL"
-            base["confirmation_level"] = "GODMODE ONLY"
-            base["confirmation_adjustment"] = -8
-            base["x_quality_adjustment"] = -4 if fakeout_risk in ("HIGH", "ELEVATED") else 0
-            base["reason"] = f"GODMODE {godmode} remains active; SONIC is not fully confirmed. X status: {x_status}; fake-out risk: {fakeout_risk}."
+
+        base["signal"] = sonic
+        if godmode == sonic:
+            base["agreement"] = "SONIC + GODMODE AGREE"
+            base["confirmation_level"] = "SONIC LEAD • GODMODE CONFIRMS"
+            base["confirmation_adjustment"] = 4 if strong_x else 2
+            base["x_quality_adjustment"] = 4 if strong_x else (-2 if fakeout_risk in ("HIGH", "ELEVATED") else 0)
+            base["reason"] = f"SONIC leads with {sonic}; GODMODE agrees as lightweight confirmation. DI boxes {plus_boxes}:{minus_boxes}; {x_status}."
+        elif godmode == "WAIT":
+            base["agreement"] = "SONIC ONLY"
+            base["confirmation_level"] = "SONIC LEAD • NO GODMODE CONFIRM"
+            base["confirmation_adjustment"] = -2
+            base["x_quality_adjustment"] = -3 if fakeout_risk in ("HIGH", "ELEVATED") else 0
+            base["reason"] = f"SONIC leads {sonic}; GODMODE has no confirmation. Confidence reduced slightly. DI boxes {plus_boxes}:{minus_boxes}; {x_status}."
         else:
-            base["agreement"] = "CONFLICT"
-            base["confirmation_level"] = "CONFLICT — CAUTION"
-            base["confirmation_adjustment"] = -18
-            base["x_quality_adjustment"] = -4
-            base["reason"] = f"GODMODE says {godmode}, but SONIC says {sonic}; retain GODMODE with a sharp strength reduction. X status: {x_status}; fake-out risk: {fakeout_risk}."
+            base["agreement"] = "SONIC LEADS • GODMODE DISAGREES"
+            base["confirmation_level"] = "SONIC LEAD • CONFLICT CAUTION"
+            base["confirmation_adjustment"] = -5
+            base["x_quality_adjustment"] = -3
+            base["reason"] = f"SONIC direction {sonic} remains primary; GODMODE disagrees ({godmode}), so confidence is reduced without overriding direction. DI boxes {plus_boxes}:{minus_boxes}; {x_status}."
 
         # Lockout applies to duplicate alerts only, never to the live signal or chart.
         candle_id = str(candles[-1].get("time"))
@@ -181,7 +183,7 @@ class CombinedEngine:
         base["locked"] = bool(locked or same_candle)
         base["alert_eligible"] = not base["locked"]
         if base["alert_eligible"]:
-            self.last_signal[key] = godmode
+            self.last_signal[key] = sonic
             self.last_signal_candle[key] = candle_id
             self.lock_until[key] = now + expiration
         elif locked:
