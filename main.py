@@ -480,9 +480,10 @@ def snapshot(tf=None, asset=None):
     # GODMODE owns the signal. SONIC is a confirmation checklist, never a veto.
     hybrid = _hybrid_engine.evaluate(_bars, ASSET, step, is_live, signal, score)
     signal = hybrid["signal"]
-    # Strength is a heuristic confluence score, NOT a measured win probability.
-    strength = min(99, 55 + abs(base_score) * 7 + min(14, abs(extra_vote) * 2)) if is_live and signal != "WAIT" else 0
-    strength = max(1, min(99, strength + int(hybrid.get("confirmation_adjustment", 0)))) if signal != "WAIT" and is_live else 0
+    # Confluence strength score (not a statistically verified win probability).
+    # 90+ is reserved for a strong GODMODE signal with matching SONIC and a healthy, expanding DI X.
+    strength = min(99, 60 + abs(score) * 4 + min(12, abs(extra_vote) * 2)) if is_live and signal != "WAIT" else 0
+    strength = max(1, min(99, strength + int(hybrid.get("confirmation_adjustment", 0)) + int(hybrid.get("x_quality_adjustment", 0)))) if signal != "WAIT" and is_live else 0
     strength_label = "PERFECT" if strength >= 99 else ("AMAZING" if strength >= 90 else "TERRIFIC")
     candle_age = max(0, now - int(_bars[-1]["time"])) if is_live else 0
     age_fraction = min(1.0, candle_age / step) if is_live and step else 1.0
