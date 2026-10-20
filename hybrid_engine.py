@@ -133,7 +133,7 @@ class CombinedEngine:
                 sonic = "BUY"
 
         total_di = max(1e-9, plus + minus)
-        plus_boxes = max(0, min(5, int(round(5 * plus / total_di))))
+        plus_boxes = max(1, min(4, int(round(5 * plus / total_di))))
         minus_boxes = 5 - plus_boxes
         base.update({
             "sonic_signal": sonic, "wide_x": bool(wide),
