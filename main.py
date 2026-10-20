@@ -503,13 +503,16 @@ def snapshot(tf=None, asset=None):
     score = base_score + (1 if extra_vote >= 2 else (-1 if extra_vote <= -2 else 0))
     aligned = (trend > 0 and extra_vote >= 1) if score > 0 else (trend < 0 and extra_vote <= -1)
     signal = ("BUY" if score >= 3 and aligned else ("SELL" if score <= -3 and aligned else "WAIT")) if is_live else "WAIT"
-    # GODMODE owns the signal. SONIC is a confirmation checklist, never a veto.
+    # SONIC owns direction; Godmode-family indicators are lightweight confirmation only.
     hybrid = _hybrid_engine.evaluate(_bars, ASSET, step, is_live, signal, score)
     signal = hybrid["signal"]
-    # Confluence strength score (not a statistically verified win probability).
-    # 90+ is reserved for a strong GODMODE signal with matching SONIC and a healthy, expanding DI X.
-    strength = min(99, 60 + abs(score) * 4 + min(12, abs(extra_vote) * 2)) if is_live and signal != "WAIT" else 0
-    strength = max(1, min(99, strength + int(hybrid.get("confirmation_adjustment", 0)) + int(hybrid.get("x_quality_adjustment", 0)))) if signal != "WAIT" and is_live else 0
+    # Transparent confluence index (not a statistically verified win probability).
+    # Sonic DI dominance/X quality drives strength; Godmode contributes only a small adjustment.
+    di_gap = float(hybrid.get("di_gap", 0) or 0)
+    di_strength = min(12, int(di_gap / 4))
+    sonic_ready = signal != "WAIT"
+    strength = min(99, 78 + di_strength + (5 if hybrid.get("x_quality", 0) >= 3 else 0)) if is_live and sonic_ready else 0
+    strength = max(1, min(99, strength + int(hybrid.get("confirmation_adjustment", 0)) + int(hybrid.get("x_quality_adjustment", 0)))) if sonic_ready and is_live else 0
     # Minimum actionable confluence is 80/100. This is an indicator score, not a win probability.
     if is_live and signal != "WAIT" and strength < 80:
         signal = "WAIT"
@@ -532,6 +535,20 @@ def snapshot(tf=None, asset=None):
         "wavetrend_signal": round(wt2[-1], 2) if is_live else None,
         "wavetrend_bias": ("BULLISH" if wt_cross > 0 else "BEARISH") if is_live else "UNAVAILABLE",
         "wavetrend_event": wt_event if is_live else "NO LIVE DATA",
+        "sonic_signal": hybrid.get("sonic_signal", "WAIT"),
+        "godmode_signal": hybrid.get("godmode_signal", "WAIT"),
+        "engine": hybrid.get("engine", "SONIC PRIMARY"),
+        "agreement": hybrid.get("agreement", "UNAVAILABLE"),
+        "confirmation_level": hybrid.get("confirmation_level", "WAIT"),
+        "fractal_arrow": hybrid.get("fractal_arrow"),
+        "plus_di": hybrid.get("plus_di"), "minus_di": hybrid.get("minus_di"),
+        "plus_di_boxes": hybrid.get("plus_di_boxes", 0),
+        "minus_di_boxes": hybrid.get("minus_di_boxes", 0),
+        "di_box_ratio": hybrid.get("di_box_ratio", "0:0"),
+        "wide_x": hybrid.get("wide_x", False),
+        "x_status": hybrid.get("x_status", "UNAVAILABLE"),
+        "reason": hybrid.get("reason", ""),
+
         "base_score": base_score if is_live else 0,
         "enhancement_vote": extra_vote if is_live else 0,
         "hybrid_engine": hybrid,
