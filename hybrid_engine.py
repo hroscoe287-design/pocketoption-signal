@@ -1,11 +1,11 @@
-"""Combined GODMODE + SONIC confirmation engine.
+"""GODMODE-primary signal engine with SONIC as a confirmation checklist.
 
-Signal-only: never places orders. Requires live candles, GODMODE confluence,
-SONIC ADX +DI/-DI separation ("wide X"), and a confirmed Fractal-3 arrow
-aligned with the SONIC direction. Re-alerts are locked out for 2x timeframe.
+Signal-only: never places orders. SONIC changes the displayed strength/confirmation,
+but does not veto an otherwise valid live GODMODE signal.
 """
 from __future__ import annotations
 import time
+
 
 def _wilder(values, period):
     if len(values) < period:
@@ -14,6 +14,7 @@ def _wilder(values, period):
     for value in values[period:]:
         out.append((out[-1] * (period - 1) + value) / period)
     return out
+
 
 def _adx(candles, di_length=7, adx_smoothing=14):
     if len(candles) < di_length + 1:
@@ -37,6 +38,7 @@ def _adx(candles, di_length=7, adx_smoothing=14):
     adx_values = _wilder(dx, adx_smoothing)
     return {"plus": p[-1], "minus": m[-1], "adx": adx_values[-1] if adx_values else None}
 
+
 def _latest_fractal(candles, lookback=10):
     # A 5-bar Fractal-3 needs two candles to the right to confirm.
     if len(candles) < 5:
@@ -50,6 +52,7 @@ def _latest_fractal(candles, lookback=10):
             return {"arrow": "UP", "time": candles[i]["time"], "price": low}
     return None
 
+
 class CombinedEngine:
     def __init__(self):
         self.last_signal = {}
@@ -60,29 +63,41 @@ class CombinedEngine:
         key = f"{asset}|{int(timeframe_seconds)}"
         now = time.time()
         expiration = max(5, int(timeframe_seconds) * 2)
+        godmode = godmode_signal if godmode_signal in ("BUY", "SELL") else "WAIT"
         base = {
-            "signal": "WAIT", "sonic_signal": "WAIT", "wide_x": False,
+            "signal": godmode, "godmode_signal": godmode,
+            "sonic_signal": "WAIT", "wide_x": False,
             "fractal_arrow": None, "plus_di": None, "minus_di": None,
             "adx": None, "expiration_seconds": expiration, "locked": False,
-            "engine": "GODMODE + SONIC HYBRID",
-            "reason": "Waiting for live candles and aligned confirmations."
+            "alert_eligible": False, "agreement": "UNAVAILABLE",
+            "confirmation_level": "GODMODE ONLY" if godmode != "WAIT" else "WAIT",
+            "confirmation_adjustment": 0,
+            "engine": "GODMODE PRIMARY + SONIC CHECKLIST",
+            "reason": "SONIC is a checklist; it adjusts confirmation strength but does not veto GODMODE."
         }
         if not live:
+            base["signal"] = "WAIT"
+            base["godmode_signal"] = "WAIT"
+            base["confirmation_level"] = "WAIT"
             base["reason"] = "Live feed unavailable; signals disabled."
             return base
         if len(candles) < 25:
-            base["reason"] = f"Warming up hybrid indicators: {len(candles)}/25 candles."
+            base["signal"] = "WAIT"
+            base["godmode_signal"] = "WAIT"
+            base["confirmation_level"] = "WAIT"
+            base["reason"] = f"Warming up indicators: {len(candles)}/25 candles."
             return base
         d = _adx(candles, 7, 14)
         fractal = _latest_fractal(candles, 10)
         if not d:
-            base["reason"] = "Waiting for ADX +DI/-DI values."
+            base["signal"] = godmode
+            base["reason"] = "SONIC indicators warming up; GODMODE signal remains primary."
             return base
         gap = abs(d["plus"] - d["minus"])
         wide = gap >= max(5.0, d["plus"] * 0.22, d["minus"] * 0.22)
         sonic = "WAIT"
         if wide and fractal:
-            # Match the existing SONIC arrow-to-DI mapping.
+            # Existing SONIC arrow-to-DI mapping.
             if fractal["arrow"] == "UP" and d["minus"] >= d["plus"]:
                 sonic = "SELL"
             elif fractal["arrow"] == "DOWN" and d["plus"] >= d["minus"]:
@@ -94,43 +109,45 @@ class CombinedEngine:
             "plus_di": round(d["plus"], 2), "minus_di": round(d["minus"], 2),
             "adx": round(d["adx"], 2) if d["adx"] is not None else None,
             "di_gap": round(gap, 2),
+            "signal": godmode,
+            "godmode_signal": godmode,
         })
-        if not wide:
-            base["reason"] = "Waiting for a WIDE X: +DI/-DI separation is not strong enough."
+        if godmode == "WAIT":
+            base["confirmation_level"] = "WAIT"
+            base["agreement"] = "NO GODMODE SIGNAL"
+            base["reason"] = "No GODMODE signal; SONIC alone cannot create a trade signal."
             return base
-        if not fractal:
-            base["reason"] = "Wide X detected; waiting for a confirmed Fractal-3 arrow."
-            return base
-        if sonic == "WAIT":
-            base["reason"] = "Wide X detected, but Fractal arrow and DI direction do not line up."
-            return base
-        # Accept a directional GODMODE confirmation even when its display label
-        # differs; require a meaningful score in the same direction rather than
-        # demanding two independently generated labels to match exactly.
-        try:
-            score_value = float(godmode_score or 0)
-        except (TypeError, ValueError):
-            score_value = 0
-        godmode_agrees = (
-            (sonic == "BUY" and (godmode_signal == "BUY" or score_value >= 2))
-            or (sonic == "SELL" and (godmode_signal == "SELL" or score_value <= -2))
-        )
-        if not godmode_agrees:
-            base["reason"] = f"SONIC confirms {sonic}, but GODMODE score/signal does not confirm that direction (score {score_value:g}); waiting."
-            return base
-        if now < self.lock_until.get(key, 0):
-            base["locked"] = True
-            base["reason"] = f"Hybrid signal lockout active for {int(self.lock_until[key] - now)}s; chart continues updating."
-            return base
+        if sonic == godmode:
+            base["agreement"] = "AGREE"
+            base["confirmation_level"] = "STRONGER CONFIRMATION"
+            base["confirmation_adjustment"] = 8
+            base["reason"] = f"GODMODE {godmode} + SONIC {sonic} agree; stronger confluence."
+        elif sonic == "WAIT":
+            base["agreement"] = "PARTIAL"
+            base["confirmation_level"] = "GODMODE ONLY"
+            base["confirmation_adjustment"] = -8
+            if not wide:
+                detail = "WIDE X is not strong enough"
+            elif not fractal:
+                detail = "no confirmed Fractal-3 arrow yet"
+            else:
+                detail = "SONIC arrow/DI conditions do not fully align"
+            base["reason"] = f"GODMODE {godmode} remains active; lower strength because {detail}."
+        else:
+            base["agreement"] = "CONFLICT"
+            base["confirmation_level"] = "CONFLICT — CAUTION"
+            base["confirmation_adjustment"] = -18
+            base["reason"] = f"GODMODE says {godmode}, but SONIC says {sonic}; keep GODMODE visible with a sharply reduced strength warning."
+        # Lockout applies to duplicate alerts only, never to the live signal or chart.
         candle_id = str(candles[-1].get("time"))
-        if self.last_signal_candle.get(key) == candle_id:
-            base["reason"] = "This candle already produced a hybrid signal; waiting for a new candle."
-            return base
-        self.last_signal[key] = sonic
-        self.last_signal_candle[key] = candle_id
-        self.lock_until[key] = now + expiration
-        base.update({
-            "signal": sonic, "locked": False,
-            "reason": f"GODMODE + SONIC aligned: WIDE X + Fractal {fractal['arrow']} + DI confirmation."
-        })
+        same_candle = self.last_signal_candle.get(key) == candle_id
+        locked = now < self.lock_until.get(key, 0)
+        base["locked"] = bool(locked or same_candle)
+        base["alert_eligible"] = not base["locked"]
+        if base["alert_eligible"]:
+            self.last_signal[key] = godmode
+            self.last_signal_candle[key] = candle_id
+            self.lock_until[key] = now + expiration
+        elif locked:
+            base["reason"] += f" Duplicate alert suppressed for about {int(self.lock_until[key] - now)}s; signal/chart continue updating."
         return base
