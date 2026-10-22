@@ -700,11 +700,14 @@ def desire_audio_clip(clip_name: str):
     audio_files = {
         "intro": "01_desire_intro.mp3",
         "activation": "01_desire_intro.mp3",
-        "sup": "desire-sup.mp3",
-        "super-focused": "desire-super-focused.mp3",
-        "super-excited": "desire-super-excited.mp3",
-        "super-excited-alt": "desire-super-excited-alt.mp3",
-        "super-excited-copy": "desire-super-excited-copy.mp3",
+        # These aliases must point to files that are actually inside the committed
+        # 13-clip bundle. Older aliases referenced separate files that were never
+        # bundled, causing 404s and silently bypassing DESIRE's recorded voice.
+        "sup": "02_superior_signal.mp3",
+        "super-focused": "02_superior_signal.mp3",
+        "super-excited": "02_superior_signal.mp3",
+        "super-excited-alt": "02_superior_signal.mp3",
+        "super-excited-copy": "02_superior_signal.mp3",
         "scanning": "10_scanning.mp3",
         "early-warning": "11_fakeout_warning.mp3",
         "bullish-setup": "08_call_signal.mp3",
@@ -727,9 +730,42 @@ def desire_audio_clip(clip_name: str):
     # A single uploaded ZIP is enough: extract only flat MP3 members into this
     # folder on first playback. This avoids requiring an ElevenLabs API key.
     bundle = os.path.join(audio_dir, "desire_13_voice_clips_repo_upload.zip")
-    if os.path.isfile(bundle):
-        try:
-            os.makedirs(audio_dir, exist_ok=True)
+    try:
+        os.makedirs(audio_dir, exist_ok=True)
+        if os.path.isfile(bundle):
+            with zipfile.ZipFile(bundle, "r") as archive:
+                for member in archive.infolist():
+                    # Only extract flat MP3 files; ignore directories and path traversal.
+                    name = os.path.basename(member.filename)
+                    if name == member.filename and name.lower().endswith(".mp3") and not member.is_dir():
+                        target = os.path.join(audio_dir, name)
+                        if not os.path.isfile(target):
+                            with archive.open(member, "r") as src, open(target, "wb") as dst:
+                                dst.write(src.read())
+    except (OSError, zipfile.BadZipFile) as exc:
+        logger.warning("DESIRE local voice bundle could not be extracted (%s)", type(exc).__name__)
+    path = os.path.join(audio_dir, filename)
+    if not os.path.isfile(path):
+        return Response(status_code=404)
+    return FileResponse(path, media_type="audio/mpeg", headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.get("/api/desire/audio-status")
+def desire_audio_status():
+    """Report whether the committed DESIRE recordings are present and playable."""
+    audio_dir = os.path.join(os.path.dirname(__file__), "static", "desire_audio")
+    bundle = os.path.join(audio_dir, "desire_13_voice_clips_repo_upload.zip")
+    expected = [
+        "01_desire_intro.mp3", "02_superior_signal.mp3", "03_perfect_signal.mp3",
+        "04_five_second_countdown.mp3", "05_twenty_second_entry_window.mp3",
+        "06_below_threshold.mp3", "07_signal_cancelled.mp3", "08_call_signal.mp3",
+        "09_put_signal.mp3", "10_scanning.mp3", "11_fakeout_warning.mp3",
+        "12_signal_locked.mp3", "13_standby.mp3",
+    ]
+    # Trigger the same safe extraction path used by playback.
+    try:
+        os.makedirs(audio_dir, exist_ok=True)
+        if os.path.isfile(bundle):
             with zipfile.ZipFile(bundle, "r") as archive:
                 for member in archive.infolist():
                     name = os.path.basename(member.filename)
@@ -738,12 +774,18 @@ def desire_audio_clip(clip_name: str):
                         if not os.path.isfile(target):
                             with archive.open(member, "r") as src, open(target, "wb") as dst:
                                 dst.write(src.read())
-        except (OSError, zipfile.BadZipFile) as exc:
-            logger.warning("DESIRE local voice bundle could not be extracted (%s)", type(exc).__name__)
-    path = os.path.join(audio_dir, filename)
-    if not os.path.isfile(path):
-        return Response(status_code=404)
-    return FileResponse(path, media_type="audio/mpeg", headers={"Cache-Control": "public, max-age=86400"})
+    except (OSError, zipfile.BadZipFile) as exc:
+        logger.warning("DESIRE audio status extraction failed (%s)", type(exc).__name__)
+    present = [name for name in expected if os.path.isfile(os.path.join(audio_dir, name))]
+    return {
+        "ok": len(present) == len(expected),
+        "bundle_present": os.path.isfile(bundle),
+        "clips_present": len(present),
+        "clips_expected": len(expected),
+        "missing": [name for name in expected if name not in present],
+        "elevenlabs_configured": bool(os.getenv("ELEVENLABS_API_KEY", "").strip()),
+        "note": "Bundled MP3 playback does not require an ElevenLabs API key."
+    }
 
 
 @app.get("/health")
@@ -856,14 +898,13 @@ function speakDesire(text){
   for(const [pattern,name] of clipRules){if(pattern.test(lower)&&await playLocal(name))return;}
   if(/i am desire/.test(lower)){if(await playLocal('intro'))return;}
   if(lower==='sup'||lower==='sup!'){if(await playLocal('sup'))return;}
-  // Use the actual saved "Super" recording for the SUPERIOR callout.
+  // Play the committed local superior-signal recording instead of rotating through
+  // legacy filenames that were not included in the repository's audio bundle.
   if(/superior/.test(lower)){
     const prefix=phrase.match(/^(.+?)(?=\s*superior)/i);
     const suffix=phrase.replace(/^.*?superior[!.,]?\s*/i,'').trim();
     if(prefix&&prefix[1].trim())await browserSpeak(prefix[1].replace(/[!.,]+$/,''));
-    const clips=['super-excited','super-focused','super-excited-alt','super-excited-copy'];
-    const chosen=clips[Math.floor(Math.random()*clips.length)];
-    if(await playLocal(chosen)){if(suffix)await browserSpeak(suffix);return;}
+    if(await playLocal('superior-signal')){if(suffix)await browserSpeak(suffix);return;}
   }
   try{
    const response=await fetch('/api/desire/voice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:phrase})});
