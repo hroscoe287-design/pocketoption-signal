@@ -148,6 +148,21 @@ class CombinedEngine:
         dominant_rising = (minus_rising if minus > plus else plus_rising)
         strong_x = bool(wide and widening and dominant_rising and adx is not None and adx >= 18 and adx_rising)
         forming_x = bool(not wide and gap > prior_gap and (plus_rising or minus_rising))
+        # DESIRE agent translates the early-X measurements into a clearly
+        # labeled heads-up. "SUPERIOR" requires stronger confluence, not just
+        # a close crossover; it remains a heuristic setup grade, not a win rate.
+        desire_superior = bool(
+            (strong_x and early_score >= 65) or
+            (early_warning and early_score >= 80 and adx_rising and abs(spread_velocity) > 0)
+        )
+        desire_level = "SUPERIOR" if desire_superior else ("EARLY WATCH" if early_warning else "SCANNING")
+        desire_direction = early_direction if early_warning else "WAIT"
+        desire_message = (
+            "SUPERIOR CHANGE WATCH: DI crossover momentum is accelerating; verify price action before entry."
+            if desire_superior else
+            ("Early DI crossover forming. Wait for stronger separation/confirmation."
+             if early_warning else "Monitoring +DI/-DI spread, velocity, acceleration and ADX strength.")
+        )
         if strong_x:
             x_status, x_quality, fakeout_risk = "STRONG / EXPANDING X", 3, "LOWER"
         elif wide and adx is not None and adx < 15:
@@ -186,6 +201,12 @@ class CombinedEngine:
             "di_gap": round(gap, 2), "di_gap_previous": round(prior_gap, 2),
             "early_x_warning": bool(early_warning),
             "early_x_status": early_status,
+            "desire_agent": "DESIRE",
+            "desire_level": desire_level,
+            "desire_superior": desire_superior,
+            "desire_direction": desire_direction,
+            "desire_score": int(early_score),
+            "desire_message": desire_message,
             "early_x_direction": early_direction if early_warning else "WAIT",
             "early_x_score": int(early_score),
             "projected_cross_bars": round(projected_cross_bars, 2) if projected_cross_bars is not None else None,
