@@ -735,9 +735,9 @@ function startTradeCountdown(direction,asset,tf){
   if(latestSignalIsLive&&latestRawSignal===direction&&latestSignalStrength>=90){
    num.textContent="0";msg.textContent="ENTRY ALERT — "+direction+" • "+latestSignalStrength+"/100 • "+new Date().toLocaleTimeString();playAlert(direction);lastMainSignal=direction+":"+asset+":"+tf;
    const sig=document.getElementById("signal");sig.textContent=direction;sig.className="signal "+direction+" alerting";
-   document.getElementById("entryStatus").textContent="COUNTDOWN 1 — "+latestSignalStrength+"/100 — CHECK LIVE PRICE NOW";
+   document.getElementById("entryStatus").textContent="COUNTDOWN 0 — "+latestSignalStrength+"/100 — VERIFY LIVE PRICE NOW";
    document.getElementById("chartSignalBadge").className="chart-signal-badge "+direction+" alerting";document.getElementById("chartSignalText").textContent=direction;
-  }else{num.textContent="—";msg.textContent="At 1, strength was below 90 — alert cancelled";box.className="countdown-box";}
+  }else{num.textContent="—";msg.textContent="Strength fell below 90 at entry time — alert cancelled";box.className="countdown-box";}
  },1000);
 }
 function gateSignal(rawSignal,asset,tf,bars,now,eligible){
