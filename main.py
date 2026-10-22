@@ -790,14 +790,14 @@ function startTradeCountdown(direction,asset,tf){
  const state={direction,asset,tf,remaining:duration,endAt:Date.now()+duration*1000,timer:null};pendingCountdown=state;
  const target=document.getElementById("countdownTime");
  const showTarget=()=>{if(target)target.textContent=new Date(state.endAt).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:"2-digit"});};
- box.className="countdown-box active "+direction;num.textContent=String(duration);msg.textContent="You have "+duration+" seconds to place your trade • "+direction+" • "+latestSignalStrength+"/100";showTarget();speakDesire("You have "+duration+" seconds to place your trade");let lastSpoken=duration;
+ box.className="countdown-box active "+direction;num.textContent=String(duration);msg.textContent="You have "+duration+" seconds to place your trade • "+direction+" • "+latestSignalStrength+"/100";showTarget();if(duration>5){speakDesire("You have "+duration+" seconds to place your trade");}else{speakDesire("Entering trade in "+duration);}let lastSpoken=duration;
  state.timer=setInterval(()=>{
   if(pendingCountdown!==state){clearInterval(state.timer);return;}
   if(!latestSignalIsLive||latestRawSignal!==direction||latestSignalStrength<90){
    clearInterval(state.timer);cancelTradeCountdown("Live setup weakened below 90/100 or direction changed — no alert");return;
   }
   state.remaining=Math.max(0,Math.ceil((state.endAt-Date.now())/1000));num.textContent=String(state.remaining);showTarget();
-  if(state.remaining>0&&state.remaining!==lastSpoken){lastSpoken=state.remaining;msg.textContent="You have "+state.remaining+" seconds to place your trade • "+direction+" • "+latestSignalStrength+"/100";speakDesire(String(state.remaining));}
+  if(state.remaining>0&&state.remaining<=5&&state.remaining!==lastSpoken){lastSpoken=state.remaining;msg.textContent="Entering trade in "+state.remaining+" • "+direction+" • "+latestSignalStrength+"/100";speakDesire(String(state.remaining));}
   if(state.remaining>0)return;
   clearInterval(state.timer);pendingCountdown=null;
   if(latestSignalIsLive&&latestRawSignal===direction&&latestSignalStrength>=90){
