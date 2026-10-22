@@ -751,20 +751,35 @@ const godmodeSeen=new Set();let soundEnabled=false,audioCtx=null,lastAudibleSign
 let desireAudio=null,desireSpeechQueue=Promise.resolve(),desireVoiceWarningShown=false;
 function speakDesire(text){
  if(!soundEnabled)return;
- // Queue hosted speech so the countdown never overlaps itself.
+ // Queue speech so countdown words never overlap. Hosted ElevenLabs audio is
+ // preferred when configured; browser speech is the no-key fallback.
  desireSpeechQueue=desireSpeechQueue.then(async()=>{
+  const browserSpeak=()=>new Promise(resolve=>{
+   try{
+    if(!('speechSynthesis' in window)||!window.SpeechSynthesisUtterance){resolve();return;}
+    window.speechSynthesis.cancel();
+    const utterance=new SpeechSynthesisUtterance(String(text));
+    const voices=window.speechSynthesis.getVoices();
+    const female=voices.find(v=>/female|samantha|victoria|zira|aria|jenny|karen/i.test(v.name));
+    if(female)utterance.voice=female;
+    utterance.rate=0.94;utterance.pitch=1.12;utterance.volume=1;
+    utterance.onend=resolve;utterance.onerror=resolve;
+    window.speechSynthesis.speak(utterance);
+    setTimeout(resolve,Math.max(2500,String(text).length*100));
+   }catch(e){resolve();}
+  });
   try{
    const response=await fetch('/api/desire/voice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
    if(!response.ok){
-    let detail='Hosted voice unavailable';
+    let detail='Using device voice for DESIRE';
     try{const data=await response.json();detail=data.error||detail;}catch(_){}
-    if(!desireVoiceWarningShown){desireVoiceWarningShown=true;const hint=document.getElementById('soundHint');if(hint)hint.textContent=detail;}
-    return;
+    const hint=document.getElementById('soundHint');if(hint)hint.textContent='DESIRE voice: device voice fallback';
+    await browserSpeak();return;
    }
    const audioUrl=URL.createObjectURL(await response.blob());
    const audio=new Audio(audioUrl);desireAudio=audio;audio.volume=1;
-   await new Promise(resolve=>{audio.onended=()=>{URL.revokeObjectURL(audioUrl);resolve();};audio.onerror=()=>{URL.revokeObjectURL(audioUrl);resolve();};audio.play().catch(()=>{URL.revokeObjectURL(audioUrl);resolve();});});
-  }catch(e){console.warn('DESIRE hosted voice unavailable',e);}
+   await new Promise(resolve=>{audio.onended=()=>{URL.revokeObjectURL(audioUrl);resolve();};audio.onerror=()=>{URL.revokeObjectURL(audioUrl);resolve();};audio.play().catch(async()=>{URL.revokeObjectURL(audioUrl);await browserSpeak();resolve();});});
+  }catch(e){console.warn('DESIRE hosted voice unavailable; using device voice',e);await browserSpeak();}
  });
 }
 function cancelTradeCountdown(message){
