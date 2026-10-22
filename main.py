@@ -790,9 +790,18 @@ function speakDesire(text){
   });
   const playLocal=async(name)=>{
    try{
-    const audio=new Audio('/audio/desire/'+name);desireAudio=audio;audio.volume=1;
-    await new Promise(resolve=>{let finished=false;const done=()=>{if(!finished){finished=true;resolve();}};audio.onended=done;audio.onerror=done;audio.play().then(()=>{}).catch(done);setTimeout(done,7000);});
-    return true;
+    const audio=new Audio('/audio/desire/'+encodeURIComponent(name));desireAudio=audio;audio.volume=1;audio.preload='auto';
+    const played=await new Promise(resolve=>{
+     let finished=false;let started=false;
+     const finish=(ok)=>{if(!finished){finished=true;clearTimeout(timer);audio.onplaying=null;audio.onended=null;audio.onerror=null;resolve(ok);}};
+     const timer=setTimeout(()=>finish(false),5000);
+     audio.onplaying=()=>{started=true;};
+     audio.onended=()=>finish(started);
+     audio.onerror=()=>finish(false);
+     Promise.resolve(audio.play()).catch(()=>finish(false));
+    });
+    if(!played){try{audio.pause();audio.currentTime=0;}catch(_){}}
+    return played;
    }catch(_){return false;}
   };
   const lower=phrase.toLowerCase();
