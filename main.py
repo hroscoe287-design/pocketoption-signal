@@ -891,7 +891,7 @@ function speakDesire(text){
    [/possible fakeout detected/,'fakeout-warning'],
    [/setup rejected/,'signal-rejected'],
    [/entry window approaching|entering trade in 5$/,'entry-countdown'],
-   [/you have .* seconds to place your trade|twenty seconds to review/,'long-timeframe'],
+   [/you have 20 seconds to place your trade|twenty seconds to review/,'long-timeframe'],
    [/momentum is fading/,'momentum-fading'],
    [/no confirmed superior setup|i am still watching/,'standby']
   ];
