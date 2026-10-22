@@ -101,6 +101,43 @@ class CombinedEngine:
         gap = abs(plus - minus)
         prior_gap = abs(d["plus_prev"] - d["minus_prev"])
         gap_before = abs(d["plus_prev2"] - d["minus_prev2"])
+        # Early-X Radar: estimate whether DI lines are converging toward a
+        # crossover or have just crossed and are beginning to separate.
+        # This is a transparent heuristic, not a trained AI or a probability.
+        spread_now = plus - minus
+        spread_prev = d["plus_prev"] - d["minus_prev"]
+        spread_prev2 = d["plus_prev2"] - d["minus_prev2"]
+        spread_velocity = spread_now - spread_prev
+        spread_acceleration = spread_velocity - (spread_prev - spread_prev2)
+        projected_cross_bars = (abs(spread_now / spread_velocity)
+                                if abs(spread_velocity) > 1e-9 and spread_now * spread_velocity < 0
+                                else None)
+        crossing_soon = projected_cross_bars is not None and projected_cross_bars <= 2.5
+        just_crossed = spread_now * spread_prev <= 0 and abs(spread_now) > 0
+        early_direction = "BUY" if spread_velocity > 0 else ("SELL" if spread_velocity < 0 else "WAIT")
+        early_score = 0
+        if abs(spread_velocity) > 0:
+            early_score += 30
+        if spread_velocity * (spread_prev - spread_prev2) > 0:
+            early_score += 20
+        if d["plus"] > d["plus_prev"] and d["minus"] < d["minus_prev"]:
+            early_score += 20
+        elif d["minus"] > d["minus_prev"] and d["plus"] < d["plus_prev"]:
+            early_score += 20
+        if d.get("adx") is not None and d.get("adx_prev") is not None and d["adx"] >= d["adx_prev"]:
+            early_score += 15
+        if crossing_soon or just_crossed:
+            early_score += 15
+        early_score = min(100, early_score)
+        early_warning = bool(early_score >= 65 and (crossing_soon or just_crossed or gap > prior_gap))
+        if crossing_soon:
+            early_status = "CROSS APPROACHING"
+        elif just_crossed and gap > prior_gap:
+            early_status = "X JUST TURNING / EXPANDING"
+        elif early_warning:
+            early_status = "EARLY X WATCH"
+        else:
+            early_status = "SCANNING — NO EARLY X"
         threshold = max(5.0, plus * 0.22, minus * 0.22)
         wide = gap >= threshold
         widening = gap > prior_gap > gap_before
@@ -147,6 +184,13 @@ class CombinedEngine:
             "plus_di": round(plus, 2), "minus_di": round(minus, 2),
             "adx": round(adx, 2) if adx is not None else None,
             "di_gap": round(gap, 2), "di_gap_previous": round(prior_gap, 2),
+            "early_x_warning": bool(early_warning),
+            "early_x_status": early_status,
+            "early_x_direction": early_direction if early_warning else "WAIT",
+            "early_x_score": int(early_score),
+            "projected_cross_bars": round(projected_cross_bars, 2) if projected_cross_bars is not None else None,
+            "spread_velocity": round(spread_velocity, 3),
+            "spread_acceleration": round(spread_acceleration, 3),
             "signal": godmode, "godmode_signal": godmode,
         })
         # SONIC leads. GODMODE is only a lightweight confirmation.
