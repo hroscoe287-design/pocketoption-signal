@@ -853,7 +853,7 @@ main{max-width:1400px;margin:auto;padding:18px;display:grid;grid-template-column
 <div class="foot">This is an original experimental signal prototype, not the proprietary Godmode V4 algorithm. “PERFECT,” “AMAZING,” and “TERRIFIC” describe indicator confluence only and are not probabilities of winning. Entry timing is a candle-age warning, not a guarantee that a trade is safe. Binary-options trading carries a high risk of loss. Signals remain disabled unless Pocket Option live candles are actually received.</div>
 <script>
 const chartEl=document.getElementById('chart');let candleCanvas=null,selectedTF=15,lastChartBars=[],refreshInFlight=false;
-const godmodeSeen=new Set();let soundEnabled=false,audioCtx=null,lastAudibleSignal="",lastMainSignal="";let signalLock=null;let previousLiveClose=null;let pendingCountdown=null;let latestRawSignal="WAIT",latestSignalIsLive=false,latestSignalStrength=0,lastDesireAlertKey="",lastEarlyXAlertKey="";
+const godmodeSeen=new Set();let soundEnabled=false,audioCtx=null,lastAudibleSignal="",lastMainSignal="";let signalLock=null;let previousLiveClose=null;let pendingCountdown=null;let latestRawSignal="WAIT",latestSignalIsLive=false,latestSignalStrength=0,lastDesireAlertKey="",lastEarlyXAlertKey="";const desireAlertedCandles=new Set();
 let desireSpeechQueue=Promise.resolve(),desireChosenVoice=null,desireVoiceWarningShown=false;
 function chooseDesireVoice(){
  if(desireChosenVoice)return desireChosenVoice;
@@ -946,31 +946,22 @@ function startTradeCountdown(direction,asset,tf){
    const sig=document.getElementById("signal");sig.textContent=direction;sig.className="signal "+direction+" alerting";
    document.getElementById("entryStatus").textContent="COUNTDOWN 0 — "+latestSignalStrength+"/100 — VERIFY LIVE PRICE NOW";
    document.getElementById("chartSignalBadge").className="chart-signal-badge "+direction+" alerting";document.getElementById("chartSignalText").textContent=direction;
-  }else{num.textContent="—";msg.textContent="Strength fell below 90 at entry time — alert cancelled";box.className="countdown-box";}
- },250);
-}
-function gateSignal(rawSignal,asset,tf,bars,now,eligible){
+  }else{num.textContent="—";msg.textContent="Strength fell below 90 at entry time — alert cancelled";box.clfunction gateSignal(rawSignal,asset,tf,bars,now,eligible){
   if(rawSignal!=="BUY"&&rawSignal!=="SELL")return {signal:rawSignal,alert:false};
   const last=bars&&bars.length?bars[bars.length-1]:null;
   const key=asset+":"+tf;
-  if(!signalLock||signalLock.key!==key||now>=signalLock.until){
-    if(!eligible)return {signal:"WAIT",alert:false};
-    signalLock={key,direction:rawSignal,until:now+(Math.max(1,Number(tf)||5)+5)*1000,candleTime:last?last.time:null,continuationAlerted:false,lastClose:last?last.close:null};
-    previousLiveClose=last?last.close:null;
-    return {signal:rawSignal,alert:true};
-  }
-  // During the expiry lock, only permit one extra alert if the same live candle
-  // is still moving decisively in the original direction and makes a new extreme.
-  let continuation=false;
-  if(rawSignal===signalLock.direction&&last&&last.time===signalLock.candleTime&&!signalLock.continuationAlerted){
-    const body=Number(last.close)-Number(last.open);
-    const aligned=rawSignal==="BUY"?body>0:body<0;
-    const extendsMove=signalLock.lastClose!=null&&(rawSignal==="BUY"?Number(last.close)>Number(signalLock.lastClose):Number(last.close)<Number(signalLock.lastClose));
-    continuation=aligned&&extendsMove;
-  }
-  if(last)signalLock.lastClose=Number(last.close);
-  if(continuation&&eligible){signalLock.continuationAlerted=true;return {signal:rawSignal,alert:true,continuation:true};}
-  return {signal:"WAIT",alert:false,locked:true};
+  const candleKey=key+":"+(last?String(last.time):"unknown");
+  // One alert per asset/timeframe/candle. Never issue continuation alerts or
+  // repeat the same setup on every 250 ms browser refresh.
+  if(desireAlertedCandles.has(candleKey))return {signal:"WAIT",alert:false,locked:true};
+  if(signalLock&&signalLock.key===key&&now<signalLock.until)return {signal:"WAIT",alert:false,locked:true};
+  if(!eligible)return {signal:"WAIT",alert:false};
+  desireAlertedCandles.add(candleKey);
+  // Bound memory while preserving recent candle deduplication.
+  if(desireAlertedCandles.size>500){const first=desireAlertedCandles.values().next().value;desireAlertedCandles.delete(first);}
+  signalLock={key,direction:rawSignal,until:now+Math.max(1,Number(tf)||5)*1000,candleTime:last?last.time:null,lastClose:last?last.close:null};
+  previousLiveClose=last?last.close:null;
+  return {signal:rawSignal,alert:true};
 }
 function playAlert(kind){if(!soundEnabled)return;try{audioCtx=audioCtx||new (window.AudioContext||window.webkitAudioContext)();if(audioCtx.state==="suspended")audioCtx.resume();const now=audioCtx.currentTime;const notes=kind==="BUY"?[880,1174,880]:[220,165,110];notes.forEach((freq,i)=>{const osc=audioCtx.createOscillator(),gain=audioCtx.createGain();osc.type=kind==="BUY"?"sine":"sawtooth";osc.frequency.setValueAtTime(freq,now+i*.16);gain.gain.setValueAtTime(.0001,now+i*.16);gain.gain.exponentialRampToValueAtTime(.18,now+i*.16+.025);gain.gain.exponentialRampToValueAtTime(.0001,now+i*.16+.14);osc.connect(gain);gain.connect(audioCtx.destination);osc.start(now+i*.16);osc.stop(now+i*.16+.15)});}catch(e){console.warn("Audio alert unavailable",e)}}
 document.getElementById("soundToggle").addEventListener("click",async()=>{try{audioCtx=audioCtx||new (window.AudioContext||window.webkitAudioContext)();await audioCtx.resume();soundEnabled=!soundEnabled;const b=document.getElementById("soundToggle");b.textContent=soundEnabled?"🔊 SOUND ON":"🔇 SOUND OFF";b.classList.toggle("enabled",soundEnabled);document.getElementById("soundHint").textContent=soundEnabled?"BING = BUY • ROAR = SELL":"Tap to enable sound alerts";if(soundEnabled){const osc=audioCtx.createOscillator(),gain=audioCtx.createGain();osc.frequency.value=660;gain.gain.value=.08;osc.connect(gain);gain.connect(audioCtx.destination);osc.start();osc.stop(audioCtx.currentTime+.12)}}catch(e){document.getElementById("soundHint").textContent="Sound blocked by browser; check phone volume/settings"}});
