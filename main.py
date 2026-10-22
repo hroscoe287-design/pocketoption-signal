@@ -728,20 +728,30 @@ function cancelTradeCountdown(message){
  const target=document.getElementById("countdownTime");if(target)target.textContent="—";
  document.getElementById("countdownMessage").textContent=message||"Setup no longer qualifies — no alert";
 }
+function desireCountdownSeconds(tf){
+ const seconds=Math.max(1,Number(tf)||5);
+ if(seconds<=15)return 5;
+ if(seconds<=60)return 8;
+ if(seconds<=300)return 20;
+ if(seconds<=900)return 30;
+ if(seconds<=1800)return 45;
+ return 60;
+}
 function startTradeCountdown(direction,asset,tf){
  if(pendingCountdown)return;
  const box=document.getElementById("tradeCountdown"),num=document.getElementById("countdownNumber"),msg=document.getElementById("countdownMessage");
- const state={direction,asset,tf,remaining:5,endAt:Date.now()+5000,timer:null};pendingCountdown=state;
+ const duration=desireCountdownSeconds(tf);
+ const state={direction,asset,tf,remaining:duration,endAt:Date.now()+duration*1000,timer:null};pendingCountdown=state;
  const target=document.getElementById("countdownTime");
  const showTarget=()=>{if(target)target.textContent=new Date(state.endAt).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:"2-digit"});};
- box.className="countdown-box active "+direction;num.textContent="5";msg.textContent="Entering trade in 5 • "+direction+" • "+latestSignalStrength+"/100";showTarget();speakDesire("Entering trade in 5");let lastSpoken=5;
+ box.className="countdown-box active "+direction;num.textContent=String(duration);msg.textContent="You have "+duration+" seconds to place your trade • "+direction+" • "+latestSignalStrength+"/100";showTarget();speakDesire("You have "+duration+" seconds to place your trade");let lastSpoken=duration;
  state.timer=setInterval(()=>{
   if(pendingCountdown!==state){clearInterval(state.timer);return;}
   if(!latestSignalIsLive||latestRawSignal!==direction||latestSignalStrength<90){
    clearInterval(state.timer);cancelTradeCountdown("Live setup weakened below 90/100 or direction changed — no alert");return;
   }
   state.remaining=Math.max(0,Math.ceil((state.endAt-Date.now())/1000));num.textContent=String(state.remaining);showTarget();
-  if(state.remaining>0&&state.remaining!==lastSpoken){lastSpoken=state.remaining;msg.textContent="Entering trade in "+state.remaining+" • "+direction+" • "+latestSignalStrength+"/100";speakDesire(String(state.remaining));}
+  if(state.remaining>0&&state.remaining!==lastSpoken){lastSpoken=state.remaining;msg.textContent="You have "+state.remaining+" seconds to place your trade • "+direction+" • "+latestSignalStrength+"/100";speakDesire(String(state.remaining));}
   if(state.remaining>0)return;
   clearInterval(state.timer);pendingCountdown=null;
   if(latestSignalIsLive&&latestRawSignal===direction&&latestSignalStrength>=90){
@@ -750,7 +760,7 @@ function startTradeCountdown(direction,asset,tf){
    document.getElementById("entryStatus").textContent="COUNTDOWN 0 — "+latestSignalStrength+"/100 — VERIFY LIVE PRICE NOW";
    document.getElementById("chartSignalBadge").className="chart-signal-badge "+direction+" alerting";document.getElementById("chartSignalText").textContent=direction;
   }else{num.textContent="—";msg.textContent="Strength fell below 90 at entry time — alert cancelled";box.className="countdown-box";}
- },1000);
+ },250);
 }
 function gateSignal(rawSignal,asset,tf,bars,now,eligible){
   if(rawSignal!=="BUY"&&rawSignal!=="SELL")return {signal:rawSignal,alert:false};
