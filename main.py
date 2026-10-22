@@ -4,7 +4,7 @@ from fastapi.responses import HTMLResponse, Response, FileResponse
 from urllib.request import Request as URLRequest, urlopen
 from urllib.error import HTTPError, URLError
 from fastapi.middleware.cors import CORSMiddleware
-import math, random, os, json, threading, time, logging
+import math, random, os, json, threading, time, logging, zipfile
 
 from godmode_strategy import GodModeStrategy
 from godmode_enhancements import analyze as analyze_enhancements
@@ -723,7 +723,24 @@ def desire_audio_clip(clip_name: str):
     filename = audio_files.get(clip_name)
     if not filename:
         return Response(status_code=404)
-    path = os.path.join(os.path.dirname(__file__), "static", "desire_audio", filename)
+    audio_dir = os.path.join(os.path.dirname(__file__), "static", "desire_audio")
+    # A single uploaded ZIP is enough: extract only flat MP3 members into this
+    # folder on first playback. This avoids requiring an ElevenLabs API key.
+    bundle = os.path.join(audio_dir, "desire_13_voice_clips_repo_upload.zip")
+    if os.path.isfile(bundle):
+        try:
+            os.makedirs(audio_dir, exist_ok=True)
+            with zipfile.ZipFile(bundle, "r") as archive:
+                for member in archive.infolist():
+                    name = os.path.basename(member.filename)
+                    if name == member.filename and name.lower().endswith(".mp3") and not member.is_dir():
+                        target = os.path.join(audio_dir, name)
+                        if not os.path.isfile(target):
+                            with archive.open(member, "r") as src, open(target, "wb") as dst:
+                                dst.write(src.read())
+        except (OSError, zipfile.BadZipFile) as exc:
+            logger.warning("DESIRE local voice bundle could not be extracted (%s)", type(exc).__name__)
+    path = os.path.join(audio_dir, filename)
     if not os.path.isfile(path):
         return Response(status_code=404)
     return FileResponse(path, media_type="audio/mpeg", headers={"Cache-Control": "public, max-age=86400"})
@@ -831,7 +848,7 @@ function speakDesire(text){
    [/high-strength setup detected/,'strong-setup'],
    [/possible fakeout detected/,'fakeout-warning'],
    [/setup rejected/,'signal-rejected'],
-   [/entry window approaching|entering trade in/,'entry-countdown'],
+   [/entry window approaching|entering trade in 5$/,'entry-countdown'],
    [/you have .* seconds to place your trade|twenty seconds to review/,'long-timeframe'],
    [/momentum is fading/,'momentum-fading'],
    [/no confirmed superior setup|i am still watching/,'standby']
