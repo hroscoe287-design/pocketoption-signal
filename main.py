@@ -946,7 +946,8 @@ function startTradeCountdown(direction,asset,tf){
    const sig=document.getElementById("signal");sig.textContent=direction;sig.className="signal "+direction+" alerting";
    document.getElementById("entryStatus").textContent="COUNTDOWN 0 — "+latestSignalStrength+"/100 — VERIFY LIVE PRICE NOW";
    document.getElementById("chartSignalBadge").className="chart-signal-badge "+direction+" alerting";document.getElementById("chartSignalText").textContent=direction;
-  }else{num.textContent="—";msg.textContent="Strength fell below 90 at entry time — alert cancelled";box.clfunction gateSignal(rawSignal,asset,tf,bars,now,eligible){
+  }else{num.textContent="—";msg.textContent="Strength fell below 90 at entry time — alert cancelled";box.className="countdown-box";}
+function gateSignal(rawSignal,asset,tf,bars,now,eligible){
   if(rawSignal!=="BUY"&&rawSignal!=="SELL")return {signal:rawSignal,alert:false};
   const last=bars&&bars.length?bars[bars.length-1]:null;
   const key=asset+":"+tf;
