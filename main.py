@@ -29,6 +29,11 @@ _po_last_tick_signature = {}
 _po_last_tick_received_at = {}
 _po_subscription_started_at = {}
 _po_subscribed_keys = set()
+# Cache the broker symbol catalog: querying it on every chart refresh can block
+# the market worker and repeatedly trip the watchdog on slow Pocket Option sockets.
+_po_assets_cache = []
+_po_assets_cache_at = 0.0
+_PO_ASSET_CACHE_SECONDS = 60.0
 _PO_HISTORY_POLL_SECONDS = 1.0
 _PO_TICK_STALE_SECONDS = 15.0
 
@@ -236,18 +241,25 @@ def _fetch_po_bars_blocking(asset, timeframe):
         # This supports OTC crypto, metals, stocks and indices when the broker offers them,
         # even if the UI's symbol capitalization differs from the feed's canonical name.
         actual_asset = asset
-        try:
-            catalog = client.get_assets() or {}
-            catalog_symbols = list(catalog.keys()) if isinstance(catalog, dict) else list(catalog) if isinstance(catalog, (list, tuple, set)) else []
-            match = next((str(symbol) for symbol in catalog_symbols if str(symbol).strip().casefold() == asset.strip().casefold()), None)
-            if match:
-                actual_asset = match
-            elif catalog_symbols:
-                _po_status = f"Asset unavailable in connected Pocket Option catalog: {asset}"
-                return None
-        except Exception:
-            # Catalog lookup is best-effort; let the broker subscription validate the symbol.
-            pass
+        global _po_assets_cache, _po_assets_cache_at
+        catalog_symbols = list(_po_assets_cache)
+        if not catalog_symbols or now - _po_assets_cache_at >= _PO_ASSET_CACHE_SECONDS:
+            try:
+                catalog = client.get_assets() or {}
+                fresh_symbols = list(catalog.keys()) if isinstance(catalog, dict) else list(catalog) if isinstance(catalog, (list, tuple, set)) else []
+                if fresh_symbols:
+                    _po_assets_cache = [str(symbol) for symbol in fresh_symbols if str(symbol).strip()]
+                    _po_assets_cache_at = now
+                    catalog_symbols = list(_po_assets_cache)
+            except Exception:
+                # A slow catalog call must not erase a previously verified symbol list.
+                pass
+        match = next((str(symbol) for symbol in catalog_symbols if str(symbol).strip().casefold() == asset.strip().casefold()), None)
+        if match:
+            actual_asset = match
+        elif catalog_symbols:
+            _po_status = f"Asset unavailable in connected Pocket Option catalog: {asset}"
+            return None
         try:
             if not client.is_time_synced():
                 _po_status = "Pocket Option connected; waiting for server time sync"
