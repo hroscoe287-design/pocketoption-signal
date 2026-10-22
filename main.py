@@ -709,6 +709,18 @@ main{max-width:1400px;margin:auto;padding:18px;display:grid;grid-template-column
 <script>
 const chartEl=document.getElementById('chart');let candleCanvas=null,selectedTF=15,lastChartBars=[],refreshInFlight=false;
 const godmodeSeen=new Set();let soundEnabled=false,audioCtx=null,lastAudibleSignal="",lastMainSignal="";let signalLock=null;let previousLiveClose=null;let pendingCountdown=null;let latestRawSignal="WAIT",latestSignalIsLive=false,latestSignalStrength=0,lastDesireAlertKey="";
+function speakDesire(text){
+ if(!soundEnabled||!('speechSynthesis' in window)||typeof SpeechSynthesisUtterance==='undefined')return;
+ try{
+  window.speechSynthesis.cancel();
+  const utterance=new SpeechSynthesisUtterance(text);
+  utterance.lang='en-US';utterance.rate=0.92;utterance.pitch=1.18;utterance.volume=1;
+  const voices=window.speechSynthesis.getVoices();
+  const female=voices.find(v=>/female|samantha|victoria|zira|karen|susan|aria|jenny|ava|google us english/i.test(v.name));
+  if(female)utterance.voice=female;
+  window.speechSynthesis.speak(utterance);
+ }catch(e){console.warn('DESIRE voice unavailable',e)}
+}
 function cancelTradeCountdown(message){
  const state=pendingCountdown;if(state&&state.timer)clearInterval(state.timer);pendingCountdown=null;
  const box=document.getElementById("tradeCountdown");box.className="countdown-box";
@@ -722,18 +734,18 @@ function startTradeCountdown(direction,asset,tf){
  const state={direction,asset,tf,remaining:5,endAt:Date.now()+5000,timer:null};pendingCountdown=state;
  const target=document.getElementById("countdownTime");
  const showTarget=()=>{if(target)target.textContent=new Date(state.endAt).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:"2-digit"});};
- box.className="countdown-box active "+direction;num.textContent="5";msg.textContent=direction+" setup • "+latestSignalStrength+"/100 • checking live data";showTarget();
+ box.className="countdown-box active "+direction;num.textContent="5";msg.textContent="Entering trade in 5 • "+direction+" • "+latestSignalStrength+"/100";showTarget();speakDesire("Entering trade in 5");let lastSpoken=5;
  state.timer=setInterval(()=>{
   if(pendingCountdown!==state){clearInterval(state.timer);return;}
   if(!latestSignalIsLive||latestRawSignal!==direction||latestSignalStrength<90){
    clearInterval(state.timer);cancelTradeCountdown("Live setup weakened below 90/100 or direction changed — no alert");return;
   }
   state.remaining=Math.max(0,Math.ceil((state.endAt-Date.now())/1000));num.textContent=String(state.remaining);showTarget();
-  msg.textContent=direction+" • "+latestSignalStrength+"/100 • alert at zero";
+  if(state.remaining>0&&state.remaining!==lastSpoken){lastSpoken=state.remaining;msg.textContent="Entering trade in "+state.remaining+" • "+direction+" • "+latestSignalStrength+"/100";speakDesire(String(state.remaining));}
   if(state.remaining>0)return;
   clearInterval(state.timer);pendingCountdown=null;
   if(latestSignalIsLive&&latestRawSignal===direction&&latestSignalStrength>=90){
-   num.textContent="0";msg.textContent="ENTRY ALERT — "+direction+" • "+latestSignalStrength+"/100 • "+new Date().toLocaleTimeString();playAlert(direction);lastMainSignal=direction+":"+asset+":"+tf;
+   num.textContent="NOW!";msg.textContent="NOW! SUPERIOR! — "+direction+" • "+latestSignalStrength+"/100 • "+new Date().toLocaleTimeString();speakDesire("Now! Superior!");playAlert(direction);lastMainSignal=direction+":"+asset+":"+tf;
    const sig=document.getElementById("signal");sig.textContent=direction;sig.className="signal "+direction+" alerting";
    document.getElementById("entryStatus").textContent="COUNTDOWN 0 — "+latestSignalStrength+"/100 — VERIFY LIVE PRICE NOW";
    document.getElementById("chartSignalBadge").className="chart-signal-badge "+direction+" alerting";document.getElementById("chartSignalText").textContent=direction;
