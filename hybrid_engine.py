@@ -241,6 +241,47 @@ class CombinedEngine:
             base["x_quality_adjustment"] = -3
             base["reason"] = f"SONIC direction {sonic} remains primary; GODMODE disagrees ({godmode}), so confidence is reduced without overriding direction. DI boxes {plus_boxes}:{minus_boxes}; {x_status}."
 
+        # DESIRE high-confluence gate. This is a setup-grade score, NOT a
+        # calibrated win probability. Early warnings remain visible, but CALL/PUT
+        # alerts require strong trend expansion, matching GODMODE direction, and
+        # low fakeout risk. No orders are ever placed by this engine.
+        desire_setup_strength = 0
+        if strong_x:
+            desire_setup_strength += 35
+        if early_score >= 80:
+            desire_setup_strength += 20
+        if fractal is not None and (
+            (sonic == "BUY" and fractal["arrow"] == "DOWN") or
+            (sonic == "SELL" and fractal["arrow"] == "UP")
+        ):
+            desire_setup_strength += 15
+        if godmode == sonic:
+            desire_setup_strength += 15
+        if adx is not None and adx >= 20 and adx_rising:
+            desire_setup_strength += 10
+        if fakeout_risk == "LOWER":
+            desire_setup_strength += 5
+        desire_setup_strength = min(100, desire_setup_strength)
+        base["desire_setup_strength"] = desire_setup_strength
+        base["desire_signal_threshold"] = 90
+        base["desire_signal_status"] = (
+            "STRONG SETUP — SIGNAL ELIGIBLE"
+            if desire_setup_strength >= 90 and strong_x and godmode == sonic and fakeout_risk == "LOWER"
+            else "WAIT — NEED 90+ CONFLUENCE"
+        )
+        # High-threshold signal filter: don't publish an actionable signal unless
+        # every required confirmation agrees. Keep chart/radar/early warning live.
+        if not (desire_setup_strength >= 90 and strong_x and godmode == sonic and fakeout_risk == "LOWER"):
+            base["signal"] = "WAIT"
+            base["alert_eligible"] = False
+            base["confirmation_level"] = "DESIRE HIGH-CONFLUENCE FILTER"
+            base["reason"] = (
+                f"DESIRE blocks the trade alert: setup grade {desire_setup_strength}/100 "
+                f"(90 required), strong expanding X, matching GODMODE direction and low fakeout risk required. "
+                f"Radar remains active: {early_status}."
+            )
+            return base
+
         # Lockout applies to duplicate alerts only, never to the live signal or chart.
         candle_id = str(candles[-1].get("time"))
         same_candle = self.last_signal_candle.get(key) == candle_id
