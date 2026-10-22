@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
+from urllib.request import Request as URLRequest, urlopen
+from urllib.error import HTTPError, URLError
 from fastapi.middleware.cors import CORSMiddleware
 import math, random, os, json, threading, time, logging
 
@@ -655,6 +657,43 @@ def api_diagnostics(asset: str = "NZDUSD", tf: int = 60):
         return {"ok": False, "requested_asset": asset, "timeframe_seconds": tf, "error_type": type(e).__name__, "status": _po_status}
 
 
+@app.post("/api/desire/voice")
+def desire_voice(payload: dict):
+    """Generate real hosted speech for DESIRE; API key stays on the server."""
+    api_key = os.getenv("ELEVENLABS_API_KEY", "").strip()
+    if not api_key:
+        return Response(
+            content=json.dumps({"error": "DESIRE voice is not connected yet. Add ELEVENLABS_API_KEY in Render Environment."}),
+            status_code=503,
+            media_type="application/json",
+        )
+    text = str(payload.get("text", ""))[:240]
+    if not text.strip():
+        return Response(content=json.dumps({"error": "Speech text is required."}), status_code=400, media_type="application/json")
+    voice_id = os.getenv("DESIRE_VOICE_ID", "XB0fDUnXU5powFXDhCwa").strip()
+    request_body = json.dumps({
+        "text": text,
+        "model_id": "eleven_flash_v2_5",
+        "voice_settings": {"stability": 0.55, "similarity_boost": 0.78, "style": 0.35, "use_speaker_boost": True},
+    }).encode("utf-8")
+    request = URLRequest(
+        f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=mp3_44100_128",
+        data=request_body,
+        headers={"xi-api-key": api_key, "Content-Type": "application/json", "Accept": "audio/mpeg"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=8) as result:
+            audio = result.read()
+        return Response(content=audio, media_type="audio/mpeg", headers={"Cache-Control": "no-store"})
+    except HTTPError as exc:
+        logger.warning("DESIRE hosted voice request failed with HTTP %s", exc.code)
+        return Response(content=json.dumps({"error": "DESIRE voice provider rejected the request. Check the API key, voice ID, and account credits."}), status_code=502, media_type="application/json")
+    except (URLError, TimeoutError, OSError) as exc:
+        logger.warning("DESIRE hosted voice unavailable (%s)", type(exc).__name__)
+        return Response(content=json.dumps({"error": "DESIRE voice provider is temporarily unavailable."}), status_code=502, media_type="application/json")
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "mode": "live" if _po_status == "POCKET OPTION LIVE CANDLES" else "demo", "feed_status": _po_status}
@@ -709,17 +748,24 @@ main{max-width:1400px;margin:auto;padding:18px;display:grid;grid-template-column
 <script>
 const chartEl=document.getElementById('chart');let candleCanvas=null,selectedTF=15,lastChartBars=[],refreshInFlight=false;
 const godmodeSeen=new Set();let soundEnabled=false,audioCtx=null,lastAudibleSignal="",lastMainSignal="";let signalLock=null;let previousLiveClose=null;let pendingCountdown=null;let latestRawSignal="WAIT",latestSignalIsLive=false,latestSignalStrength=0,lastDesireAlertKey="";
+let desireAudio=null,desireSpeechQueue=Promise.resolve(),desireVoiceWarningShown=false;
 function speakDesire(text){
- if(!soundEnabled||!('speechSynthesis' in window)||typeof SpeechSynthesisUtterance==='undefined')return;
- try{
-  window.speechSynthesis.cancel();
-  const utterance=new SpeechSynthesisUtterance(text);
-  utterance.lang='en-US';utterance.rate=0.92;utterance.pitch=1.18;utterance.volume=1;
-  const voices=window.speechSynthesis.getVoices();
-  const female=voices.find(v=>/female|samantha|victoria|zira|karen|susan|aria|jenny|ava|google us english/i.test(v.name));
-  if(female)utterance.voice=female;
-  window.speechSynthesis.speak(utterance);
- }catch(e){console.warn('DESIRE voice unavailable',e)}
+ if(!soundEnabled)return;
+ // Queue hosted speech so the countdown never overlaps itself.
+ desireSpeechQueue=desireSpeechQueue.then(async()=>{
+  try{
+   const response=await fetch('/api/desire/voice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
+   if(!response.ok){
+    let detail='Hosted voice unavailable';
+    try{const data=await response.json();detail=data.error||detail;}catch(_){}
+    if(!desireVoiceWarningShown){desireVoiceWarningShown=true;const hint=document.getElementById('soundHint');if(hint)hint.textContent=detail;}
+    return;
+   }
+   const audioUrl=URL.createObjectURL(await response.blob());
+   const audio=new Audio(audioUrl);desireAudio=audio;audio.volume=1;
+   await new Promise(resolve=>{audio.onended=()=>{URL.revokeObjectURL(audioUrl);resolve();};audio.onerror=()=>{URL.revokeObjectURL(audioUrl);resolve();};audio.play().catch(()=>{URL.revokeObjectURL(audioUrl);resolve();});});
+  }catch(e){console.warn('DESIRE hosted voice unavailable',e);}
+ });
 }
 function cancelTradeCountdown(message){
  const state=pendingCountdown;if(state&&state.timer)clearInterval(state.timer);pendingCountdown=null;
