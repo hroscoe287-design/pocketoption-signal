@@ -853,13 +853,16 @@ function chooseDesireVoice(){
  const score=v=>{
   const n=String(v.name||'').toLowerCase(),lang=String(v.lang||'').toLowerCase();
   let s=0;
-  if(/en-us|en_us/.test(lang))s+=50;
-  if(/samantha|jenny|aria|zira|ava|serena|victoria|karen|susan|google us english|female/.test(n))s+=35;
-  if(/natural|enhanced|premium/.test(n))s+=12;
-  if(/compact|robot|male|daniel|david|alex/.test(n))s-=20;
+  if(/en-us|en_us/.test(lang))s+=35;
+  if(/female|samantha|jenny|aria|zira|ava|serena|victoria|karen|susan|google us english|microsoft jenny|microsoft aria/.test(n))s+=65;
+  if(/natural|enhanced|premium|neural/.test(n))s+=25;
+  if(/compact|robot|male|daniel|david|alex|fred|junior/.test(n))s-=70;
+  if(/google.*(female|us english)|en-us-x-.*female/.test(n))s+=30;
   if(v.localService)s+=2;
   return s;
  };
+ // Cache one preferred English female-sounding voice for all Desire announcements.
+ // Warning, countdown, and signal alerts must never switch speakers.
  desireChosenVoice=pool.slice().sort((a,b)=>score(b)-score(a))[0]||null;
  return desireChosenVoice;
 }
