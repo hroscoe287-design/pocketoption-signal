@@ -842,98 +842,56 @@ main{max-width:1400px;margin:auto;padding:18px;display:grid;grid-template-column
 <script>
 const chartEl=document.getElementById('chart');let candleCanvas=null,selectedTF=15,lastChartBars=[],refreshInFlight=false;
 const godmodeSeen=new Set();let soundEnabled=false,audioCtx=null,lastAudibleSignal="",lastMainSignal="";let signalLock=null;let previousLiveClose=null;let pendingCountdown=null;let latestRawSignal="WAIT",latestSignalIsLive=false,latestSignalStrength=0,lastDesireAlertKey="",lastEarlyXAlertKey="";
-let desireAudio=null,desireSpeechQueue=Promise.resolve(),desireVoiceWarningShown=false;
+let desireSpeechQueue=Promise.resolve(),desireChosenVoice=null,desireVoiceWarningShown=false;
+function chooseDesireVoice(){
+ if(desireChosenVoice)return desireChosenVoice;
+ const synth=window.speechSynthesis;
+ const voices=synth&&synth.getVoices?synth.getVoices():[];
+ if(!voices.length)return null;
+ const english=voices.filter(v=>/^en([_-]|$)/i.test(v.lang||''));
+ const pool=english.length?english:voices;
+ const score=v=>{
+  const n=String(v.name||'').toLowerCase(),lang=String(v.lang||'').toLowerCase();
+  let s=0;
+  if(/en-us|en_us/.test(lang))s+=50;
+  if(/samantha|jenny|aria|zira|ava|serena|victoria|karen|susan|google us english|female/.test(n))s+=35;
+  if(/natural|enhanced|premium/.test(n))s+=12;
+  if(/compact|robot|male|daniel|david|alex/.test(n))s-=20;
+  if(v.localService)s+=2;
+  return s;
+ };
+ desireChosenVoice=pool.slice().sort((a,b)=>score(b)-score(a))[0]||null;
+ return desireChosenVoice;
+}
 function speakDesire(text){
  if(!soundEnabled)return;
- // Queue all speech and clips so announcements never overlap. Local MP3s use
- // the user's recorded DESIRE voice; missing files safely fall back to hosted/device speech.
- desireSpeechQueue=desireSpeechQueue.then(async()=>{
-  const phrase=String(text||'').trim();
-  const browserSpeak=(words)=>new Promise(resolve=>{
+ const phrase=String(text||'').trim();if(!phrase)return;
+ // Use one cached device voice for every announcement; never mix recorded clips
+ // or a second hosted voice into Desire's countdowns and signal alerts.
+ desireSpeechQueue=desireSpeechQueue.then(()=>new Promise(resolve=>{
+  const synth=window.speechSynthesis;
+  if(!synth||!window.SpeechSynthesisUtterance){resolve();return;}
+  const say=()=>{
    try{
-    if(!words||!('speechSynthesis' in window)||!window.SpeechSynthesisUtterance){resolve();return;}
-    const synth=window.speechSynthesis;
-    synth.cancel();
-    const utterance=new SpeechSynthesisUtterance(String(words));
-    // Android Chrome may populate installed voices shortly after page load.
-    // Wait briefly, then prefer a device-local English feminine voice when available.
-    const chooseVoice=()=>{
-     const voices=synth.getVoices()||[];
-     const english=voices.filter(v=>/^en([_-]|$)/i.test(v.lang||''));
-     const feminine=english.find(v=>/female|samantha|victoria|zira|aria|jenny|karen|susan|ava|serena|google us english/i.test(v.name||''));
-     const localEnglish=english.find(v=>v.localService)||english[0];
-     const selected=feminine||localEnglish||voices.find(v=>v.localService)||voices[0];
-     if(selected)utterance.voice=selected;
-     utterance.lang=(selected&&selected.lang)||'en-US';
-     utterance.rate=0.92;utterance.pitch=1.18;utterance.volume=1;
-     let finished=false;
-     const finish=()=>{if(!finished){finished=true;clearTimeout(watchdog);resolve();}};
-     const watchdog=setTimeout(finish,Math.max(5000,String(words).length*180));
-     utterance.onend=finish;utterance.onerror=finish;
-     try{synth.speak(utterance);}catch(_){finish();}
-    };
-    const current=synth.getVoices();
-    if(current&&current.length){chooseVoice();}
-    else{
-     let done=false;
-     const ready=()=>{if(done)return;done=true;synth.removeEventListener&&synth.removeEventListener('voiceschanged',ready);chooseVoice();};
-     if(synth.addEventListener)synth.addEventListener('voiceschanged',ready,{once:true});
-     setTimeout(ready,800);
-    }
-   }catch(e){console.warn('DESIRE device speech unavailable',e);resolve();}
-  });
-  const playLocal=async(name)=>{
-   try{
-    const audio=new Audio('/audio/desire/'+encodeURIComponent(name));desireAudio=audio;audio.volume=1;audio.preload='auto';
-    const played=await new Promise(resolve=>{
-     let finished=false;let started=false;
-     const finish=(ok)=>{if(!finished){finished=true;clearTimeout(timer);audio.onplaying=null;audio.onended=null;audio.onerror=null;resolve(ok);}};
-     const timer=setTimeout(()=>finish(false),5000);
-     audio.onplaying=()=>{started=true;};
-     audio.onended=()=>finish(started);
-     audio.onerror=()=>finish(false);
-     Promise.resolve(audio.play()).catch(()=>finish(false));
-    });
-    if(!played){try{audio.pause();audio.currentTime=0;}catch(_){}}
-    return played;
-   }catch(_){return false;}
+    const utterance=new SpeechSynthesisUtterance(phrase);
+    const voice=chooseDesireVoice();if(voice)utterance.voice=voice;
+    utterance.lang=(voice&&voice.lang)||'en-US';
+    utterance.rate=0.94;utterance.pitch=1.08;utterance.volume=1;
+    let finished=false,watchdog;
+    const finish=()=>{if(!finished){finished=true;clearTimeout(watchdog);resolve();}};
+    watchdog=setTimeout(finish,Math.max(5000,phrase.length*180));
+    utterance.onend=finish;utterance.onerror=finish;
+    synth.speak(utterance);
+   }catch(err){console.warn('DESIRE device voice unavailable',err);resolve();}
   };
-  const lower=phrase.toLowerCase();
-  // Prefer the matching ElevenLabs MP3 when it is bundled; use device speech if it is not.
-  const clipRules=[
-   [/i am desire|market intelligence is online/,'activation'],
-   [/scanning the market now/,'scanning'],
-   [/potential wide x crossover|crossover is developing/,'early-warning'],
-   [/buy pressure is building/,'bullish-setup'],
-   [/sell pressure is building/,'bearish-setup'],
-   [/superior signal detected/,'superior-signal'],
-   [/high-strength setup detected/,'strong-setup'],
-   [/possible fakeout detected/,'fakeout-warning'],
-   [/setup rejected/,'signal-rejected'],
-   [/entry window approaching|entering trade in 5$/,'entry-countdown'],
-   [/you have 20 seconds to place your trade|twenty seconds to review/,'long-timeframe'],
-   [/momentum is fading/,'momentum-fading'],
-   [/no confirmed superior setup|i am still watching/,'standby']
-  ];
-  for(const [pattern,name] of clipRules){if(pattern.test(lower)&&await playLocal(name))return;}
-  if(/i am desire/.test(lower)){if(await playLocal('intro'))return;}
-  if(lower==='sup'||lower==='sup!'){if(await playLocal('sup'))return;}
-  // Play the committed local superior-signal recording instead of rotating through
-  // legacy filenames that were not included in the repository's audio bundle.
-  if(/superior/.test(lower)){
-    const prefix=phrase.match(/^(.+?)(?=\s*superior)/i);
-    const suffix=phrase.replace(/^.*?superior[!.,]?\s*/i,'').trim();
-    if(prefix&&prefix[1].trim())await browserSpeak(prefix[1].replace(/[!.,]+$/,''));
-    if(await playLocal('superior-signal')){if(suffix)await browserSpeak(suffix);return;}
+  if(synth.getVoices&&synth.getVoices().length){say();}
+  else{
+   let done=false;
+   const ready=()=>{if(done)return;done=true;if(synth.removeEventListener)synth.removeEventListener('voiceschanged',ready);chooseDesireVoice();say();};
+   if(synth.addEventListener)synth.addEventListener('voiceschanged',ready,{once:true});
+   setTimeout(ready,900);
   }
-  try{
-   const response=await fetch('/api/desire/voice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:phrase})});
-   if(!response.ok){const hint=document.getElementById('soundHint');if(hint)hint.textContent='DESIRE voice: local clips / device fallback';await browserSpeak(phrase);return;}
-   const audioUrl=URL.createObjectURL(await response.blob());
-   const audio=new Audio(audioUrl);desireAudio=audio;audio.volume=1;
-   await new Promise(resolve=>{audio.onended=()=>{URL.revokeObjectURL(audioUrl);resolve();};audio.onerror=()=>{URL.revokeObjectURL(audioUrl);resolve();};audio.play().catch(async()=>{URL.revokeObjectURL(audioUrl);await browserSpeak(phrase);resolve();});});
-  }catch(e){console.warn('DESIRE hosted voice unavailable; using device voice',e);await browserSpeak(phrase);}
- });
+ }));
 }
 function cancelTradeCountdown(message){
  const state=pendingCountdown;if(state&&state.timer)clearInterval(state.timer);pendingCountdown=null;
