@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response, FileResponse
 from urllib.request import Request as URLRequest, urlopen
 from urllib.error import HTTPError, URLError
 from fastapi.middleware.cors import CORSMiddleware
@@ -694,6 +694,26 @@ def desire_voice(payload: dict):
         return Response(content=json.dumps({"error": "DESIRE voice provider is temporarily unavailable."}), status_code=502, media_type="application/json")
 
 
+@app.get("/audio/desire/{clip_name}")
+def desire_audio_clip(clip_name: str):
+    """Serve DESIRE's locally bundled MP3 clips without exposing arbitrary files."""
+    audio_files = {
+        "intro": "desire-intro.mp3",
+        "sup": "desire-sup.mp3",
+        "super-focused": "desire-super-focused.mp3",
+        "super-excited": "desire-super-excited.mp3",
+        "super-excited-alt": "desire-super-excited-alt.mp3",
+        "super-excited-copy": "desire-super-excited-copy.mp3",
+    }
+    filename = audio_files.get(clip_name)
+    if not filename:
+        return Response(status_code=404)
+    path = os.path.join(os.path.dirname(__file__), "static", "desire_audio", filename)
+    if not os.path.isfile(path):
+        return Response(status_code=404)
+    return FileResponse(path, media_type="audio/mpeg", headers={"Cache-Control": "public, max-age=86400"})
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "mode": "live" if _po_status == "POCKET OPTION LIVE CANDLES" else "demo", "feed_status": _po_status}
@@ -751,35 +771,50 @@ const godmodeSeen=new Set();let soundEnabled=false,audioCtx=null,lastAudibleSign
 let desireAudio=null,desireSpeechQueue=Promise.resolve(),desireVoiceWarningShown=false;
 function speakDesire(text){
  if(!soundEnabled)return;
- // Queue speech so countdown words never overlap. Hosted ElevenLabs audio is
- // preferred when configured; browser speech is the no-key fallback.
+ // Queue all speech and clips so announcements never overlap. Local MP3s use
+ // the user's recorded DESIRE voice; missing files safely fall back to hosted/device speech.
  desireSpeechQueue=desireSpeechQueue.then(async()=>{
-  const browserSpeak=()=>new Promise(resolve=>{
+  const phrase=String(text||'').trim();
+  const browserSpeak=(words)=>new Promise(resolve=>{
    try{
-    if(!('speechSynthesis' in window)||!window.SpeechSynthesisUtterance){resolve();return;}
-    window.speechSynthesis.cancel();
-    const utterance=new SpeechSynthesisUtterance(String(text));
+    if(!words||!('speechSynthesis' in window)||!window.SpeechSynthesisUtterance){resolve();return;}
+    const utterance=new SpeechSynthesisUtterance(String(words));
     const voices=window.speechSynthesis.getVoices();
     const female=voices.find(v=>/female|samantha|victoria|zira|aria|jenny|karen/i.test(v.name));
     if(female)utterance.voice=female;
     utterance.rate=0.94;utterance.pitch=1.12;utterance.volume=1;
     utterance.onend=resolve;utterance.onerror=resolve;
     window.speechSynthesis.speak(utterance);
-    setTimeout(resolve,Math.max(2500,String(text).length*100));
+    setTimeout(resolve,Math.max(2500,String(words).length*100));
    }catch(e){resolve();}
   });
+  const playLocal=async(name)=>{
+   try{
+    const audio=new Audio('/audio/desire/'+name);desireAudio=audio;audio.volume=1;
+    await new Promise(resolve=>{let finished=false;const done=()=>{if(!finished){finished=true;resolve();}};audio.onended=done;audio.onerror=done;audio.play().then(()=>{}).catch(done);setTimeout(done,7000);});
+    return true;
+   }catch(_){return false;}
+  };
+  const lower=phrase.toLowerCase();
+  // Intro and "Sup" clips are used when their matching phrase is requested.
+  if(/i am desire/.test(lower)){if(await playLocal('intro'))return;}
+  if(lower==='sup'||lower==='sup!'){if(await playLocal('sup'))return;}
+  // Use the actual saved "Super" recording for the SUPERIOR callout.
+  if(/superior/.test(lower)){
+    const prefix=phrase.match(/^(.+?)(?=\s*superior)/i);
+    const suffix=phrase.replace(/^.*?superior[!.,]?\s*/i,'').trim();
+    if(prefix&&prefix[1].trim())await browserSpeak(prefix[1].replace(/[!.,]+$/,''));
+    const clips=['super-excited','super-focused','super-excited-alt','super-excited-copy'];
+    const chosen=clips[Math.floor(Math.random()*clips.length)];
+    if(await playLocal(chosen)){if(suffix)await browserSpeak(suffix);return;}
+  }
   try{
-   const response=await fetch('/api/desire/voice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
-   if(!response.ok){
-    let detail='Using device voice for DESIRE';
-    try{const data=await response.json();detail=data.error||detail;}catch(_){}
-    const hint=document.getElementById('soundHint');if(hint)hint.textContent='DESIRE voice: device voice fallback';
-    await browserSpeak();return;
-   }
+   const response=await fetch('/api/desire/voice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:phrase})});
+   if(!response.ok){const hint=document.getElementById('soundHint');if(hint)hint.textContent='DESIRE voice: local clips / device fallback';await browserSpeak(phrase);return;}
    const audioUrl=URL.createObjectURL(await response.blob());
    const audio=new Audio(audioUrl);desireAudio=audio;audio.volume=1;
-   await new Promise(resolve=>{audio.onended=()=>{URL.revokeObjectURL(audioUrl);resolve();};audio.onerror=()=>{URL.revokeObjectURL(audioUrl);resolve();};audio.play().catch(async()=>{URL.revokeObjectURL(audioUrl);await browserSpeak();resolve();});});
-  }catch(e){console.warn('DESIRE hosted voice unavailable; using device voice',e);await browserSpeak();}
+   await new Promise(resolve=>{audio.onended=()=>{URL.revokeObjectURL(audioUrl);resolve();};audio.onerror=()=>{URL.revokeObjectURL(audioUrl);resolve();};audio.play().catch(async()=>{URL.revokeObjectURL(audioUrl);await browserSpeak(phrase);resolve();});});
+  }catch(e){console.warn('DESIRE hosted voice unavailable; using device voice',e);await browserSpeak(phrase);}
  });
 }
 function cancelTradeCountdown(message){
