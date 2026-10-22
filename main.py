@@ -852,15 +852,35 @@ function speakDesire(text){
   const browserSpeak=(words)=>new Promise(resolve=>{
    try{
     if(!words||!('speechSynthesis' in window)||!window.SpeechSynthesisUtterance){resolve();return;}
+    const synth=window.speechSynthesis;
+    synth.cancel();
     const utterance=new SpeechSynthesisUtterance(String(words));
-    const voices=window.speechSynthesis.getVoices();
-    const female=voices.find(v=>/female|samantha|victoria|zira|aria|jenny|karen/i.test(v.name));
-    if(female)utterance.voice=female;
-    utterance.rate=0.94;utterance.pitch=1.12;utterance.volume=1;
-    utterance.onend=resolve;utterance.onerror=resolve;
-    window.speechSynthesis.speak(utterance);
-    setTimeout(resolve,Math.max(2500,String(words).length*100));
-   }catch(e){resolve();}
+    // Android Chrome may populate installed voices shortly after page load.
+    // Wait briefly, then prefer a device-local English feminine voice when available.
+    const chooseVoice=()=>{
+     const voices=synth.getVoices()||[];
+     const english=voices.filter(v=>/^en([_-]|$)/i.test(v.lang||''));
+     const feminine=english.find(v=>/female|samantha|victoria|zira|aria|jenny|karen|susan|ava|serena|google us english/i.test(v.name||''));
+     const localEnglish=english.find(v=>v.localService)||english[0];
+     const selected=feminine||localEnglish||voices.find(v=>v.localService)||voices[0];
+     if(selected)utterance.voice=selected;
+     utterance.lang=(selected&&selected.lang)||'en-US';
+     utterance.rate=0.92;utterance.pitch=1.18;utterance.volume=1;
+     let finished=false;
+     const finish=()=>{if(!finished){finished=true;clearTimeout(watchdog);resolve();}};
+     const watchdog=setTimeout(finish,Math.max(5000,String(words).length*180));
+     utterance.onend=finish;utterance.onerror=finish;
+     try{synth.speak(utterance);}catch(_){finish();}
+    };
+    const current=synth.getVoices();
+    if(current&&current.length){chooseVoice();}
+    else{
+     let done=false;
+     const ready=()=>{if(done)return;done=true;synth.removeEventListener&&synth.removeEventListener('voiceschanged',ready);chooseVoice();};
+     if(synth.addEventListener)synth.addEventListener('voiceschanged',ready,{once:true});
+     setTimeout(ready,800);
+    }
+   }catch(e){console.warn('DESIRE device speech unavailable',e);resolve();}
   });
   const playLocal=async(name)=>{
    try{
