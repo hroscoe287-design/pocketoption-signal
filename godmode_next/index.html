@@ -46,7 +46,7 @@ function updateEntryCountdown(market,signal,eligible,direction,assetName,tfSecon
  dist.textContent="Distance to entry: "+Math.abs(delta).toFixed(6);
  // A new signal's entry level is latched from its first fresh, eligible candle.
  // Trigger only when subsequent price reaches/crosses that level in the signal direction.
- const crossed=direction==="BUY"?(trackedEntry.lastPrice<level&&price>=level):(trackedEntry.lastPrice>level&&price<=level);
+ const crossed=direction==="BUY"?(trackedEntry.lastPrice<=level&&price>level):(trackedEntry.lastPrice>=level&&price<level);
  if(!trackedEntry.triggered&&crossed){trackedEntry.triggered=true;entryCountdownUntil=Date.now()+5000;entryAlerted=false}
  trackedEntry.lastPrice=price;
  if(trackedEntry.triggered){
