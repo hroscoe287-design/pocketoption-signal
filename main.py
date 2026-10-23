@@ -343,18 +343,8 @@ def _fetch_po_bars_blocking(asset, timeframe):
         if key == _po_last_key and _po_cached_bars and now - _po_last_history_fetch < _PO_HISTORY_POLL_SECONDS:
             updated = [dict(bar) for bar in _po_cached_bars]
             try:
-                buckets = {}
-                for ts, price in ticks:
-                    t, p = int(float(ts)), float(price)
-                    bucket = (t // timeframe) * timeframe
-                    bar = buckets.get(bucket)
-                    if bar is None:
-                        buckets[bucket] = {"time": bucket, "open": p, "high": p, "low": p, "close": p}
-                    else:
-                        bar["high"] = max(bar["high"], p)
-                        bar["low"] = min(bar["low"], p)
-                        bar["close"] = p
-                for tick_bar in sorted(buckets.values(), key=lambda b: b["time"]):
+                tick_bars = ticks_to_candles(ticks, timeframe, limit=120)
+                for tick_bar in tick_bars:
                     if tick_bar["time"] < updated[-1]["time"]:
                         continue
                     if tick_bar["time"] == updated[-1]["time"]:
@@ -420,14 +410,40 @@ def _fetch_po_bars_blocking(asset, timeframe):
               last_candle_timestamp=(normalized[-1]["time"] if normalized else None),
               last_error_type=None, last_error_stage=None)
         if len(normalized) < 2:
-            _po_status = f"Pocket Option returned only {len(normalized)} valid candles for {actual_asset} ({timeframe}s)"
-            logger.warning("Insufficient valid bars: symbol=%s period=%s count=%s", actual_asset, timeframe, len(normalized))
+            history_count = len(normalized)
+            _po_status = f"Pocket Option returned only {history_count} valid candles for {actual_asset} ({timeframe}s); checking real ticks"
+            logger.warning("Insufficient valid history bars: symbol=%s period=%s count=%s; trying real ticks", actual_asset, timeframe, history_count)
+            try:
+                ticks = client.get_realtime_ticks(actual_asset, limit=5000) or []
+                tick_bars = ticks_to_candles(ticks, timeframe, limit=120)
+                _po_feed_debug.update({
+                    "stage": "history_insufficient_ticks_checked",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "tick_count": len(ticks),
+                    "history_count": len(candles or []),
+                    "normalized_candle_count": len(tick_bars),
+                    "last_tick_timestamp": str(ticks[-1][0]) if ticks else None,
+                    "last_candle_timestamp": tick_bars[-1]["time"] if tick_bars else None,
+                })
+                if len(tick_bars) >= 2:
+                    _po_last_key, _po_last_fetch, _po_cached_bars = key, now, tick_bars
+                    _po_status = f"POCKET OPTION LIVE TICKS — {actual_asset}"
+                    return tick_bars
+            except Exception as tick_exc:
+                _po_feed_debug.update({
+                    "stage": "history_insufficient_tick_error",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "last_error_type": type(tick_exc).__name__,
+                    "last_error_stage": "ticks_fallback",
+                })
             return None
         _po_last_key, _po_last_fetch, _po_cached_bars = key, now, normalized
         _po_status = "POCKET OPTION LIVE CANDLES"
         return normalized
     except Exception as e:
-        trace("request_error", last_error_type=type(e).__name__, last_error_stage="fetch_pipeline")
+        previous_error_stage = _po_feed_debug.get("last_error_stage")
+        trace("request_error", last_error_type=type(e).__name__,
+              last_error_stage=previous_error_stage or "fetch_pipeline")
         _po_status = "Pocket Option data request failed; live feed unavailable"
         logger.warning("PO candle request failed (%s); credential details withheld", type(e).__name__)
         # A dropped WebSocket can leave a stale client object that never reconnects.
