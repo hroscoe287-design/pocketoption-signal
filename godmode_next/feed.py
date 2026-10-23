@@ -102,7 +102,7 @@ class PocketOptionFeed:
         except Exception:pass
 
     def snapshot(self,asset,tf):
-        asset=str(asset)[:64];tf=max(5,min(604800,int(tf)))
+        asset=str(asset)[:64];tf=max(5,min(2592000,int(tf)))
         key=(asset,tf);now=time.time()
         with self.lock:
             client=self.client
@@ -154,7 +154,7 @@ class PocketOptionFeed:
                     elif b["time"]>max(bytime):bytime[b["time"]]=dict(b)
                 normalized=[bytime[t] for t in sorted(bytime)][-120:]
             now=int(time.time())
-            fresh=bool(normalized) and now-int(normalized[-1]["time"]) <= max(15,tf*2)
+            age=now-int(normalized[-1]["time"]) if normalized else None\n            fresh=bool(normalized) and -tf <= age <= max(15,tf*2)
             if fresh:
                 with self.lock:self.cache[key]=normalized;self.updated[key]=time.time()
                 self.status="Pocket Option live candles — "+actual
@@ -175,7 +175,7 @@ class PocketOptionFeed:
 
     def _response(self,asset,tf,bars,updated,verified,reason):
         now=int(time.time())
-        fresh=bool(bars) and now-int(bars[-1]["time"])<=max(15,tf*2)
+        age=now-int(bars[-1]["time"]) if bars else None\n        fresh=bool(bars) and -tf<=age<=max(15,tf*2)
         verified=bool(verified and fresh and len(bars)>=2)
         return {"ok":verified,"asset":asset,"timeframe_seconds":tf,"status":reason,
             "verified":verified,"bar_count":len(bars) if verified else 0,
