@@ -21,32 +21,78 @@ class PocketOptionFeed:
 
     @staticmethod
     def _auth():
+        """Normalize supported Render auth-secret shapes to the raw Socket.IO auth packet.
+
+        The upstream client parses SSID with an order-sensitive regex, so always
+        serialize session before isDemo. Never log or expose the session value.
+        """
         raw=os.getenv("PO_AUTH_JSON","").strip()
         if not raw:return None
+
+        def packet_from_payload(payload):
+            if not isinstance(payload,dict):return None
+            session=payload.get("session")
+            uid=payload.get("uid")
+            if not isinstance(session,str) or not session or uid is None:return None
+            # Keep the parser-required order stable regardless of the JSON the user pasted.
+            normalized={"session":session,"isDemo":payload.get("isDemo",1),"uid":uid}
+            for key,value in payload.items():
+                if key not in normalized:normalized[key]=value
+            normalized.setdefault("platform",2)
+            normalized.setdefault("isFastHistory",True)
+            normalized.setdefault("isOptimized",True)
+            return '42'+json.dumps(["auth",normalized],separators=(",",":"))
+
+        # Pocket Option browser exports commonly provide the complete Socket.IO packet.
         if raw.startswith('42["auth",'):
-            # Normalize field order before handing SSID to PocketOptionApi.
-            # Its parser extracts session only when "session" precedes "isDemo".
             try:
                 packet=json.loads(raw[2:])
-                payload=packet[1] if isinstance(packet,list) and len(packet)>1 and packet[0]=="auth" else None
-                if isinstance(payload,dict) and payload.get("session") and payload.get("uid") is not None:
-                    normalized={"session":payload["session"],"isDemo":payload.get("isDemo",1),"uid":payload["uid"]}
-                    for key,value in payload.items():
-                        if key not in normalized:normalized[key]=value
-                    return '42'+json.dumps(["auth",normalized],separators=(",",":"))
+                if isinstance(packet,list) and len(packet)>1 and packet[0]=="auth":
+                    normalized=packet_from_payload(packet[1])
+                    if normalized:return normalized
             except Exception:
                 pass
             return raw
+
         try:obj=json.loads(raw)
         except Exception:return None
-        if isinstance(obj,str) and obj.startswith('42["auth",'):return obj
+        if isinstance(obj,str) and obj.startswith('42["auth",'):
+            return PocketOptionFeed._auth_from_packet_string(obj)
         if isinstance(obj,dict):
-            if isinstance(obj.get("ssid"),str) and obj["ssid"].startswith('42["auth",'):return obj["ssid"]
+            # Some exports wrap the packet in an "ssid" field.
+            ssid=obj.get("ssid")
+            if isinstance(ssid,str) and ssid.startswith('42["auth",'):
+                try:
+                    packet=json.loads(ssid[2:])
+                    if isinstance(packet,list) and len(packet)>1 and packet[0]=="auth":
+                        normalized=packet_from_payload(packet[1])
+                        if normalized:return normalized
+                except Exception:
+                    return ssid
+                return ssid
             payload=obj.get("auth") if isinstance(obj.get("auth"),dict) else obj
-            if isinstance(payload,dict) and payload.get("session") and payload.get("uid") is not None:
-                payload=dict(payload);payload.setdefault("platform",2);payload.setdefault("isFastHistory",True);payload.setdefault("isOptimized",True)
-                return '42["auth",'+json.dumps(payload,separators=(",",":"))+"]"
+            return packet_from_payload(payload)
         return None
+
+    @staticmethod
+    def _auth_from_packet_string(packet_string):
+        try:
+            packet=json.loads(packet_string[2:])
+            payload=packet[1] if isinstance(packet,list) and len(packet)>1 and packet[0]=="auth" else None
+            if isinstance(payload,dict):
+                session=payload.get("session")
+                uid=payload.get("uid")
+                if isinstance(session,str) and session and uid is not None:
+                    normalized={"session":session,"isDemo":payload.get("isDemo",1),"uid":uid}
+                    for key,value in payload.items():
+                        if key not in normalized:normalized[key]=value
+                    normalized.setdefault("platform",2)
+                    normalized.setdefault("isFastHistory",True)
+                    normalized.setdefault("isOptimized",True)
+                    return '42'+json.dumps(["auth",normalized],separators=(",",":"))
+        except Exception:
+            pass
+        return packet_string
 
     def start(self):
         with self.lock:
