@@ -448,13 +448,25 @@ def _fetch_po_bars_blocking(asset, timeframe):
         trace("history_requested", history_count=0)
         history_started = time.monotonic()
         try:
-            candles = client.get_historical_candles(actual_asset, timeframe, offset=45000, count_request=1)
+            candles = _run_po_call_with_timeout(
+                lambda: client.get_historical_candles(actual_asset, timeframe, offset=45000, count_request=1),
+                timeout=7.0,
+            )
+        except TimeoutError:
+            # Do not let a stalled history response prevent aggregation of genuine live ticks.
+            candles = None
+            trace("history_timeout_ticks_fallback", history_count=0, last_error_type="TimeoutError",
+                  last_error_stage="historical_candles",
+                  history_elapsed_seconds=round(time.monotonic() - history_started, 3))
+            logger.warning("Pocket Option history timed out for symbol=%s period=%s; trying real tick candles",
+                           actual_asset, timeframe)
         except Exception as history_exc:
             trace("history_error", last_error_type=type(history_exc).__name__, last_error_stage="historical_candles",
                   history_elapsed_seconds=round(time.monotonic() - history_started, 3))
             raise
-        trace("history_returned", history_count=len(candles or []),
-              history_elapsed_seconds=round(time.monotonic() - history_started, 3))
+        else:
+            trace("history_returned", history_count=len(candles or []),
+                  history_elapsed_seconds=round(time.monotonic() - history_started, 3))
         if not candles:
             _po_status = f"Connected, but Pocket Option returned no history for {actual_asset} ({timeframe}s)"
             logger.warning("No historical candles returned for symbol=%s period=%s", actual_asset, timeframe)
