@@ -237,6 +237,16 @@ class PocketOptionFeed:
                     raw=result["raw"]
                     history_error=result["error"]
             normalized=normalize_historical_candles(raw or [],limit=120)
+            # Some Pocket Option history responses use a broker-local clock shifted
+            # by whole hours. Infer only a stable, near-whole-hour FUTURE skew; never
+            # shift timestamps that are already current or stale in the past.
+            if normalized:
+                clock_now=time.time()
+                skew=normalized[-1]["time"]-clock_now
+                hour_skew=round(skew/3600.0)*3600
+                if 3600 <= hour_skew <= 14*3600 and abs(skew-hour_skew) <= max(90, tf*2):
+                    normalized=[{**bar,"time":int(bar["time"]-hour_skew)} for bar in normalized]
+                    log.warning("Corrected broker history clock skew of %s seconds",int(hour_skew))
             if tick_error:
                 self.debug={"stage":"tick_error","last_error_type":tick_error}
             elif history_error:
