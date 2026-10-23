@@ -1,39 +1,46 @@
 from datetime import datetime, timezone
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pathlib import Path
-import os, time
+import time
 from engine import analyze
+from feed import feed
 
-app=FastAPI(title="GODMODE NEXT",version="0.1.0")
-STARTED=time.time()
 ROOT=Path(__file__).parent
-
+@asynccontextmanager
+async def lifespan(app):
+    feed.start()
+    yield
+app=FastAPI(title="GODMODE NEXT",version="0.2.0",lifespan=lifespan)
+STARTED=time.time()
 @app.get("/",response_class=HTMLResponse)
-def home():
-    return (ROOT/"index.html").read_text(encoding="utf-8")
-
+def home():return (ROOT/"index.html").read_text(encoding="utf-8")
 @app.get("/api/health")
 def health():
     return {"ok":True,"app":"GODMODE NEXT","mode":"signal-only","automatic_execution":False,
-      "live_feed_verified":False,"uptime_seconds":round(time.time()-STARTED,1),
-      "timestamp":datetime.now(timezone.utc).isoformat()}
-
+      "live_feed_verified":False,"uptime_seconds":round(time.time()-STARTED,1),"timestamp":datetime.now(timezone.utc).isoformat()}
 @app.get("/api/diagnostics")
 def diagnostics(asset:str="EURUSD_otc",tf:int=5):
-    # No feed is claimed until a separately validated provider adapter is installed.
-    return {"ok":False,"status":"LIVE_FEED_NOT_CONFIGURED","requested_asset":asset,
-      "timeframe_seconds":tf,"bar_count":0,"latest_bar":None,
-      "feed":{"provider":"Pocket Option","configured":bool(os.getenv("PO_AUTH_JSON")),
-      "connected":False,"verified":False,"reason":"Isolated rebuild scaffold has no live adapter enabled"},
-      "signals_enabled":False,"automatic_execution":False}
-
+    result=feed.snapshot(asset,tf)
+    return {"ok":result["verified"],"status":result["status"],"requested_asset":asset,
+      "timeframe_seconds":tf,"bar_count":result["bar_count"],"latest_bar":result["latest_bar"],
+      "feed":{"provider":"Pocket Option","configured":bool(feed._auth()),"connected":feed.client is not None,
+        "verified":result["verified"],"reason":result["status"]},"debug":result["debug"],
+      "signals_enabled":result["verified"],"automatic_execution":False}
+@app.get("/api/market")
+def market(asset:str="EURUSD_otc",tf:int=5):
+    return feed.snapshot(asset,tf)
+@app.get("/api/signal")
+def signal(asset:str="EURUSD_otc",tf:int=5):
+    market=feed.snapshot(asset,tf)
+    if not market["verified"]:
+        return {"direction":"WAIT","score":0,"eligible":False,"ready":False,
+          "reason":"Live feed unverified: "+market["status"],"components":{},"signals_enabled":False}
+    result=analyze(market["candles"])
+    return {**result,"signals_enabled":bool(result.get("eligible")),"asset":asset,"timeframe_seconds":tf,
+        "feed_verified":True,"latest_candle_time":market["latest_bar"]["time"]}
 @app.post("/api/analyze")
 def analyze_request(payload:dict):
-    bars=payload.get("candles",[])
-    verified=payload.get("live_verified") is True and payload.get("fresh") is True
-    result=analyze(bars)
-    if not verified:
-        return {**result,"direction":"WAIT","eligible":False,"signals_enabled":False,
-          "reason":"Live feed not independently verified; signal blocked"}
-    return {**result,"signals_enabled":bool(result.get("eligible"))}
+    # Client-supplied candles are never trusted for live signals.
+    return signal(str(payload.get("asset","EURUSD_otc")),int(payload.get("tf",5)))
