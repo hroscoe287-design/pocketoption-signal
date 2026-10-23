@@ -109,7 +109,7 @@ chartAnalyzeBtn.addEventListener("click",async()=>{
  chartAnalyzeBtn.disabled=true;chartStatus.textContent="Analyzing screenshot…";chartResult.textContent="Reading visible chart structure and indicator evidence. Please wait.";
  try{const response=await fetch("/api/chart-analysis",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({image_data:chartDataUrl,question:document.getElementById("chartQuestion").value})});const data=await response.json();if(!response.ok)throw Error(data.detail||"Analysis request failed ("+response.status+")");renderChartAnalysis(data);chartStatus.textContent="Analysis complete • screenshot only"}catch(error){chartResult.textContent=error.message||"Could not analyze this screenshot.";chartStatus.textContent="Analysis unavailable"}finally{chartAnalyzeBtn.disabled=false}
 });
-\n
+
 const liveChartBtn=document.getElementById("liveChartAnalyzeBtn");
 if(liveChartBtn)liveChartBtn.addEventListener("click",async()=>{
  const status=document.getElementById("liveChartStatus"),out=document.getElementById("liveChartResult");
