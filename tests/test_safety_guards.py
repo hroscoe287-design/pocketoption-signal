@@ -4,6 +4,7 @@ import unittest
 from godmode_strategy import GodModeStrategy
 from godmode_enhancements import analyze
 from hybrid_engine import CombinedEngine
+from market_feed import normalize_historical_candles, ticks_to_candles
 
 
 def bars(count=40):
@@ -44,6 +45,30 @@ class FeedSafetyTests(unittest.TestCase):
         result = analyze(bars(20))
         self.assertFalse(result["ready"])
         self.assertEqual(result["vote"], 0)
+
+    def test_historical_candles_are_sorted_deduplicated_and_malformed_rows_rejected(self):
+        raw = [
+            {"time": 15, "open": 1.2, "high": 1.3, "low": 1.1, "close": 1.25},
+            {"time": 5, "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.05},
+            {"time": 5, "open": 1.01, "high": 1.12, "low": 0.95, "close": 1.08},
+            {"time": 20, "open": 1.2, "high": 1.0, "low": 0.8, "close": 1.1},
+            {"time": 25, "open": "bad", "high": 1.3, "low": 1.0, "close": 1.2},
+        ]
+        result = normalize_historical_candles(raw)
+        self.assertEqual([bar["time"] for bar in result], [5, 15])
+        self.assertEqual(result[0]["close"], 1.08)
+
+    def test_real_ticks_aggregate_without_filling_missing_buckets(self):
+        result = ticks_to_candles([(101, 1.1), (103, 1.3), (111, 1.2)], 5)
+        self.assertEqual([bar["time"] for bar in result], [100, 110])
+        self.assertEqual(result[0]["open"], 1.1)
+        self.assertEqual(result[0]["high"], 1.3)
+        self.assertEqual(result[0]["close"], 1.3)
+
+    def test_tick_milliseconds_are_normalized_to_seconds(self):
+        result = ticks_to_candles([(1_800_000_000_000, 1.1), (1_800_000_000_100, 1.2)], 5)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["time"], 1_800_000_000)
 
 
 if __name__ == "__main__":
