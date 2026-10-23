@@ -109,11 +109,19 @@ class CombinedEngine:
         spread_prev2 = d["plus_prev2"] - d["minus_prev2"]
         spread_velocity = spread_now - spread_prev
         spread_acceleration = spread_velocity - (spread_prev - spread_prev2)
+        # Detect a crossover while the DI lines are still approaching one another,
+        # not only after they cross or begin widening. This is a heads-up, not an entry.
+        approaching_cross = (
+            abs(spread_now) < abs(spread_prev) < abs(spread_prev2)
+            and spread_now * spread_velocity < 0
+        )
         projected_cross_bars = (abs(spread_now / spread_velocity)
                                 if abs(spread_velocity) > 1e-9 and spread_now * spread_velocity < 0
                                 else None)
         crossing_soon = projected_cross_bars is not None and projected_cross_bars <= 2.5
         just_crossed = spread_now * spread_prev <= 0 and abs(spread_now) > 0
+        di_gap_velocity = gap - prior_gap
+        di_gap_acceleration = di_gap_velocity - (prior_gap - gap_before)
         early_direction = "BUY" if spread_velocity > 0 else ("SELL" if spread_velocity < 0 else "WAIT")
         early_score = 0
         if abs(spread_velocity) > 0:
@@ -126,12 +134,16 @@ class CombinedEngine:
             early_score += 20
         if d.get("adx") is not None and d.get("adx_prev") is not None and d["adx"] >= d["adx_prev"]:
             early_score += 15
+        if approaching_cross:
+            early_score += 15
         if crossing_soon or just_crossed:
             early_score += 15
         early_score = min(100, early_score)
-        early_warning = bool(early_score >= 65 and (crossing_soon or just_crossed or gap > prior_gap))
+        early_warning = bool(early_score >= 65 and (approaching_cross or crossing_soon or just_crossed or gap > prior_gap))
         if crossing_soon:
             early_status = "CROSS APPROACHING"
+        elif approaching_cross:
+            early_status = "DI LINES CONVERGING — EARLY WATCH"
         elif just_crossed and gap > prior_gap:
             early_status = "X JUST TURNING / EXPANDING"
         elif early_warning:
@@ -199,7 +211,12 @@ class CombinedEngine:
             "plus_di": round(plus, 2), "minus_di": round(minus, 2),
             "adx": round(adx, 2) if adx is not None else None,
             "di_gap": round(gap, 2), "di_gap_previous": round(prior_gap, 2),
+            "di_gap_velocity": round(di_gap_velocity, 3),
+            "di_gap_acceleration": round(di_gap_acceleration, 3),
+            "di_lines_converging": bool(approaching_cross),
+            "di_lines_diverging": bool(gap > prior_gap > gap_before),
             "early_x_warning": bool(early_warning),
+            "desire_analysis_version": "early-x-v2-convergence-radar",
             "early_x_status": early_status,
             "desire_agent": "DESIRE",
             "desire_level": desire_level,
