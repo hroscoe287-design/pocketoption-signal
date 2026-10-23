@@ -301,9 +301,10 @@ def _fetch_po_bars_blocking(asset, timeframe):
         heartbeat_started = last_tick_at or _po_subscription_started_at.get(key)
         if heartbeat_started is not None and now - heartbeat_started > _PO_TICK_STALE_SECONDS:
             silent_for = int(now - heartbeat_started)
-            _po_status = f"Pocket Option feed silent for {silent_for}s; reconnecting"
-            _schedule_po_reconnect("market subscription delivered no fresh ticks")
-            return None
+            _po_status = f"Pocket Option feed silent for {silent_for}s; checking historical candles"
+            logger.warning("No fresh Pocket Option ticks for %ss on symbol=%s period=%s; continuing history request", silent_for, actual_asset, timeframe)
+            # A quiet tick stream must not block the historical-candle fallback.
+            # Reconnect only when the history request itself fails or the client disconnects.
 
         # Don't hammer the history endpoint at browser-poll speed. Refresh the
         # history snapshot every 3 seconds and use genuine streaming ticks between
@@ -408,7 +409,7 @@ _po_refresh_key = None
 _po_refresh_requested_at = 0.0
 _po_refresh_started_at = 0.0
 _po_refresh_generation = 0
-_PO_REFRESH_WATCHDOG_SECONDS = 8.0
+_PO_REFRESH_WATCHDOG_SECONDS = 15.0
 
 def _refresh_po_bars_worker(asset, timeframe, generation):
     global _po_refresh_in_progress
