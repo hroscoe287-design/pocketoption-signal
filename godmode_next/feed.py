@@ -296,6 +296,7 @@ class PocketOptionFeed:
                 self.debug={"stage":"history_error","last_error_type":history_error}
             corrected=[]
             raw_tick_stamps=[]
+            normalized_tick_stamps=[]
             for tick in ticks:
                 try:
                     raw_stamp=float(tick[0])
@@ -305,8 +306,19 @@ class PocketOptionFeed:
                     # in epoch seconds.
                     if raw_stamp > 100_000_000_000:
                         raw_stamp /= 1000.0
-                    corrected.append((raw_stamp-self.offset,float(tick[1])))
+                    normalized_tick_stamps.append(raw_stamp-self.offset)
                 except (ValueError,TypeError,IndexError):continue
+            # The broker's history and live-stream timestamps can use different clocks.
+            # Correct a stable whole-hour FUTURE skew on ticks independently of history.
+            # Only apply it when the newest tick is near an exact hour offset from the
+            # server clock; never shift current ticks or ticks stale in the past.
+            if normalized_tick_stamps:
+                tick_skew=normalized_tick_stamps[-1]-time.time()
+                tick_hour_skew=round(tick_skew/3600.0)*3600
+                if 3600 <= tick_hour_skew <= 14*3600 and abs(tick_skew-tick_hour_skew) <= max(90,tf*2):
+                    normalized_tick_stamps=[stamp-tick_hour_skew for stamp in normalized_tick_stamps]
+                    log.warning("Corrected broker stream clock skew of %s seconds",int(tick_hour_skew))
+            corrected=[(stamp,float(tick[1])) for stamp,tick in zip(normalized_tick_stamps,ticks)]
             tickbars=ticks_to_candles(corrected,tf,limit=120)
             tick_latest=tickbars[-1]["time"] if tickbars else None
             history_latest=normalized[-1]["time"] if normalized else None
