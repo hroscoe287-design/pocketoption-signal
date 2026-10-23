@@ -154,7 +154,8 @@ class PocketOptionFeed:
                     elif b["time"]>max(bytime):bytime[b["time"]]=dict(b)
                 normalized=[bytime[t] for t in sorted(bytime)][-120:]
             now=int(time.time())
-            age=now-int(normalized[-1]["time"]) if normalized else None\n            fresh=bool(normalized) and -tf <= age <= max(15,tf*2)
+            age=now-int(normalized[-1]["time"]) if normalized else None
+            fresh=bool(normalized) and -tf <= age <= max(15,tf*2)
             if fresh:
                 with self.lock:self.cache[key]=normalized;self.updated[key]=time.time()
                 self.status="Pocket Option live candles — "+actual
