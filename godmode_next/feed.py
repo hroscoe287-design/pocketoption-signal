@@ -185,10 +185,10 @@ class PocketOptionFeed:
             corrected=[]
             for tick in ticks:
                 try:
-                    # PocketOptionApi documents stream tick timestamps as epoch seconds.
-                    # Do not subtract its stream timezone offset: doing so can shift live
-                    # ticks backward and make an otherwise live candle appear stale.
-                    corrected.append((float(tick[0]),float(tick[1])))
+                    # Pocket Option stream ticks can be stamped in the broker stream timezone
+                    # rather than UTC. Apply the offset exposed by the connected stream so
+                    # candle times line up with the server UTC clock used by freshness checks.
+                    corrected.append((float(tick[0])-self.offset,float(tick[1])))
                 except (ValueError,TypeError,IndexError):continue
             tickbars=ticks_to_candles(corrected,tf,limit=120)
             if len(normalized)<2 and len(tickbars)>=2:normalized=tickbars
