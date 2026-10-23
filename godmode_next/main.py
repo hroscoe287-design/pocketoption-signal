@@ -9,6 +9,8 @@ from engine import analyze
 from feed import feed
 
 ROOT=Path(__file__).parent
+DEFAULT_ASSET=os.getenv("PO_DEFAULT_ASSET", "EURUSD_otc")
+DEFAULT_TIMEFRAME_SECONDS=int(os.getenv("PO_DEFAULT_TIMEFRAME_SECONDS", "5"))
 @asynccontextmanager
 async def lifespan(app):
     feed.start()
