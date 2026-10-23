@@ -78,6 +78,27 @@ def _auth_wire_value():
             return '42["auth",' + json.dumps(payload, separators=(",", ":")) + "]"
     return None
 
+def _run_po_call_with_timeout(fn, timeout=7.0):
+    """Bound synchronous broker calls so a silent socket cannot pin the market worker."""
+    completed = threading.Event()
+    outcome = {}
+
+    def invoke():
+        try:
+            outcome["value"] = fn()
+        except BaseException as exc:
+            outcome["error"] = exc
+        finally:
+            completed.set()
+
+    threading.Thread(target=invoke, daemon=True, name="po-bounded-call").start()
+    if not completed.wait(timeout):
+        raise TimeoutError(f"Pocket Option broker call exceeded {timeout:.1f}s")
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome.get("value")
+
+
 def _install_po_threadsafe_sends(client):
     """Route broker writes onto the WebSocket's owning asyncio loop.
 
@@ -335,7 +356,27 @@ def _fetch_po_bars_blocking(asset, timeframe):
         subscription_key = (actual_asset, timeframe)
         trace("symbol_resolved", resolved_asset=str(actual_asset))
         if subscription_key not in _po_subscribed_keys:
-            if not client.subscribe(actual_asset, period=timeframe):
+            trace("subscribe_requested", subscribe_result=None, last_error_stage="subscribe")
+            try:
+                subscribed = _run_po_call_with_timeout(
+                    lambda: client.subscribe(actual_asset, period=timeframe), timeout=7.0
+                )
+            except TimeoutError:
+                trace("subscribe_timeout", subscribe_result=False, last_error_type="TimeoutError",
+                      last_error_stage="subscribe")
+                _po_status = f"Pocket Option subscription timed out for {actual_asset}; reconnecting"
+                logger.warning("Pocket Option subscribe timed out for symbol=%s period=%s", actual_asset, timeframe)
+                _schedule_po_reconnect("subscription call exceeded 7 seconds")
+                return None
+            except Exception as subscribe_exc:
+                trace("subscribe_error", subscribe_result=False, last_error_type=type(subscribe_exc).__name__,
+                      last_error_stage="subscribe")
+                _po_status = f"Pocket Option subscription failed for {actual_asset}"
+                logger.warning("Pocket Option subscribe failed for symbol=%s period=%s (%s)",
+                               actual_asset, timeframe, type(subscribe_exc).__name__)
+                _schedule_po_reconnect("subscription raised an exception")
+                return None
+            if not subscribed:
                 trace("subscribe_failed", subscribe_result=False, last_error_stage="subscribe")
                 _po_status = f"Pocket Option subscription failed for {actual_asset}"
                 logger.warning("Pocket Option subscribe failed for symbol=%s period=%s", actual_asset, timeframe)
