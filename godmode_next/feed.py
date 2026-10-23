@@ -120,10 +120,28 @@ class PocketOptionFeed:
             actual=asset
             try:
                 catalog=client.get_assets() or {}
-                symbols=list(catalog.keys()) if isinstance(catalog,dict) else list(catalog) if isinstance(catalog,(list,tuple,set)) else []
-                match=next((str(s) for s in symbols if str(s).strip().casefold()==asset.casefold()),None)
-                if symbols and not match:
-                    return self._response(asset,tf,[],0,False,"Asset is not present in Pocket Option's current symbol catalog")
+                # Broker library versions return catalogs in different shapes:
+                # symbol->metadata mappings, numeric-id->symbol mappings, or lists of records.
+                candidates=[]
+                def add_candidate(value):
+                    if isinstance(value,str):
+                        value=value.strip()
+                        if value:candidates.append(value)
+                    elif isinstance(value,dict):
+                        for field in ("symbol","name","asset","ticker","active_symbol","instrument"):
+                            item=value.get(field)
+                            if isinstance(item,str) and item.strip():candidates.append(item.strip())
+                if isinstance(catalog,dict):
+                    for key,value in catalog.items():
+                        add_candidate(key)
+                        add_candidate(value)
+                elif isinstance(catalog,(list,tuple,set)):
+                    for item in catalog:add_candidate(item)
+                match=next((s for s in candidates if s.casefold()==asset.strip().casefold()),None)
+                if candidates and not match:
+                    # Do not reject an asset based on an unrecognized catalog record shape.
+                    # Let the broker subscription/history calls be the source of truth.
+                    log.info("Requested symbol not directly matched in catalog; trying broker subscription for %s",asset)
                 if match:actual=match
             except Exception:pass
             sub=(actual,tf)
