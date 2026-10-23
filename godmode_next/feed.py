@@ -160,7 +160,11 @@ class PocketOptionFeed:
                 self.debug={"stage":"tick_error","last_error_type":type(e).__name__}
             corrected=[]
             for tick in ticks:
-                try:corrected.append((float(tick[0])-self.offset,float(tick[1])))
+                try:
+                    # PocketOptionApi documents stream tick timestamps as epoch seconds.
+                    # Do not subtract its stream timezone offset: doing so can shift live
+                    # ticks backward and make an otherwise live candle appear stale.
+                    corrected.append((float(tick[0]),float(tick[1])))
                 except (ValueError,TypeError,IndexError):continue
             tickbars=ticks_to_candles(corrected,tf,limit=120)
             if len(normalized)<2 and len(tickbars)>=2:normalized=tickbars
