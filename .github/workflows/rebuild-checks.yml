@@ -18,6 +18,6 @@ jobs:
         with:
           python-version: "3.12"
       - name: Compile Python modules
-        run: python -m compileall -q main.py godmode_strategy.py godmode_enhancements.py hybrid_engine.py tests
+        run: python -m compileall -q main.py godmode_strategy.py godmode_enhancements.py hybrid_engine.py market_feed.py tests
       - name: Run signal safety regression tests
         run: python -m unittest discover -s tests -v
