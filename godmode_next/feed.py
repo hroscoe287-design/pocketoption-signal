@@ -15,6 +15,7 @@ class PocketOptionFeed:
         self.cache={}
         self.updated={}
         self.subscribed=set()
+        self.subscription_times={}
         self.history_pending=set()
         self.offset=0.0
         self.worker_started=False
@@ -144,7 +145,7 @@ class PocketOptionFeed:
                 time.sleep(.25)
             try:self.offset=float(getattr(getattr(getattr(client,"api",None),"time_sync",None),"_stream_tz_offset",0) or 0)
             except (ValueError,TypeError):self.offset=0
-            with self.lock:self.client=client;self.subscribed.clear()
+            with self.lock:self.client=client;self.subscribed.clear();self.subscription_times.clear()
             self.status="Connected; waiting for symbol subscription"
         except Exception as e:
             self.status="Pocket Option client unavailable or auth rejected: "+type(e).__name__
@@ -155,7 +156,7 @@ class PocketOptionFeed:
     def _drop(self,reason):
         old=self.client
         with self.lock:
-            self.client=None;self.subscribed.clear()
+            self.client=None;self.subscribed.clear();self.subscription_times.clear()
             self.status="Live feed disconnected: "+reason
         try:
             if old and callable(getattr(old,"disconnect_websocket",None)):old.disconnect_websocket()
@@ -205,10 +206,20 @@ class PocketOptionFeed:
                 if match:actual=match
             except Exception:pass
             sub=(actual,tf)
-            if sub not in self.subscribed:
+            # Re-issue the broker subscription periodically. A successful WebSocket
+            # connection does not guarantee that the stream subscription stayed live;
+            # the old code subscribed once and could then remain stuck on history-only
+            # candles forever if the initial subfor packet was missed.
+            now_mono=time.monotonic()
+            last_sub=self.subscription_times.get(sub,0.0)
+            if sub not in self.subscribed or now_mono-last_sub >= 15.0:
                 subscribed=client.subscribe(actual,period=tf)
-                if not subscribed:return self._response(asset,tf,bars,last,False,"Pocket Option rejected market subscription")
+                if not subscribed:
+                    self.subscribed.discard(sub)
+                    self.subscription_times.pop(sub,None)
+                    return self._response(asset,tf,bars,last,False,"Pocket Option rejected market subscription")
                 self.subscribed.add(sub)
+                self.subscription_times[sub]=now_mono
             # Read realtime ticks first: historical-candle requests can block while
             # waiting for a broker response, which must not prevent live tick polling.
             ticks=[]
