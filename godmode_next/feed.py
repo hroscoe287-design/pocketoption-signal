@@ -15,6 +15,7 @@ class PocketOptionFeed:
         self.cache={}
         self.updated={}
         self.subscribed=set()
+        self.history_pending=set()
         self.offset=0.0
         self.worker_started=False
 
@@ -149,15 +150,38 @@ class PocketOptionFeed:
                 subscribed=client.subscribe(actual,period=tf)
                 if not subscribed:return self._response(asset,tf,bars,last,False,"Pocket Option rejected market subscription")
                 self.subscribed.add(sub)
-            raw=None
-            try:raw=client.get_historical_candles(actual,tf,offset=45000,count_request=1)
-            except Exception as e:
-                self.debug={"stage":"history_error","last_error_type":type(e).__name__}
-            normalized=normalize_historical_candles(raw or [],limit=120)
+            # Read realtime ticks first: historical-candle requests can block while
+            # waiting for a broker response, which must not prevent live tick polling.
             ticks=[]
+            tick_error=None
             try:ticks=client.get_realtime_ticks(actual,limit=5000) or []
-            except Exception as e:
-                self.debug={"stage":"tick_error","last_error_type":type(e).__name__}
+            except Exception as e:tick_error=type(e).__name__
+
+            # Bound the wait for history and avoid spawning duplicate history requests
+            # for the same symbol/timeframe while a previous request is still pending.
+            raw=None
+            history_error=None
+            with self.lock:
+                request_history=sub not in self.history_pending
+                if request_history:self.history_pending.add(sub)
+            if request_history:
+                result={"raw":None,"error":None}
+                finished=threading.Event()
+                def load_history():
+                    try:result["raw"]=client.get_historical_candles(actual,tf,offset=45000,count_request=1)
+                    except Exception as e:result["error"]=type(e).__name__
+                    finally:
+                        with self.lock:self.history_pending.discard(sub)
+                        finished.set()
+                threading.Thread(target=load_history,daemon=True,name="godmode-history-request").start()
+                if finished.wait(2.0):
+                    raw=result["raw"]
+                    history_error=result["error"]
+            normalized=normalize_historical_candles(raw or [],limit=120)
+            if tick_error:
+                self.debug={"stage":"tick_error","last_error_type":tick_error}
+            elif history_error:
+                self.debug={"stage":"history_error","last_error_type":history_error}
             corrected=[]
             for tick in ticks:
                 try:
