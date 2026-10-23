@@ -29,6 +29,21 @@ _po_last_tick_signature = {}
 _po_last_tick_received_at = {}
 _po_subscription_started_at = {}
 _po_subscribed_keys = set()
+# Safe, credential-free feed trace exposed by /api/diagnostics.
+_po_feed_debug = {
+    "stage": "boot",
+    "asset": None,
+    "timeframe_seconds": None,
+    "updated_at": None,
+    "subscribe_result": None,
+    "tick_count": 0,
+    "history_count": 0,
+    "normalized_candle_count": 0,
+    "last_error_type": None,
+    "last_error_stage": None,
+    "last_tick_timestamp": None,
+    "last_candle_timestamp": None,
+}
 # Cache the broker symbol catalog: querying it on every chart refresh can block
 # the market worker and repeatedly trip the watchdog on slow Pocket Option sockets.
 _po_assets_cache = []
@@ -221,8 +236,16 @@ seed_bars()
 threading.Thread(target=_po_connection_supervisor, daemon=True, name="po-market-feed-supervisor").start()
 
 def _fetch_po_bars_blocking(asset, timeframe):
-    global _po_status, _po_last_fetch, _po_last_key, _po_cached_bars
+    global _po_status, _po_last_fetch, _po_last_key, _po_cached_bars, _po_feed_debug
+    def trace(stage, **fields):
+        # Never record auth/session data or exception messages that may contain secrets.
+        _po_feed_debug.update({
+            "stage": stage, "asset": str(asset), "timeframe_seconds": int(timeframe),
+            "updated_at": datetime.now(timezone.utc).isoformat(), **fields
+        })
     client = _po_client
+    trace("client_check", tick_count=0, history_count=0, normalized_candle_count=0,
+          last_error_type=None, last_error_stage=None, subscribe_result=None)
     if client is None:
         # A failed initial connect must not leave the feed permanently stuck.
         # Retry with a cooldown, but never attempt to trade or fabricate live data.
@@ -234,6 +257,7 @@ def _fetch_po_bars_blocking(asset, timeframe):
     now = time.time()
     try:
         if not client.check_connect():
+            trace("disconnected", last_error_stage="client_check")
             _po_status = "Pocket Option disconnected; live feed unavailable"
             _schedule_po_reconnect("client.check_connect() returned false")
             return None
@@ -262,6 +286,7 @@ def _fetch_po_bars_blocking(asset, timeframe):
             return None
         try:
             if not client.is_time_synced():
+                trace("waiting_for_time_sync", last_error_stage="time_sync")
                 _po_status = "Pocket Option connected; waiting for server time sync"
                 return None
         except Exception:
@@ -270,22 +295,27 @@ def _fetch_po_bars_blocking(asset, timeframe):
         # Subscribe once per asset/timeframe per client. Calling subscribe on every
         # browser poll can flood the unofficial API and destabilize its WebSocket.
         subscription_key = (actual_asset, timeframe)
+        trace("symbol_resolved", resolved_asset=str(actual_asset))
         if subscription_key not in _po_subscribed_keys:
             if not client.subscribe(actual_asset, period=timeframe):
+                trace("subscribe_failed", subscribe_result=False, last_error_stage="subscribe")
                 _po_status = f"Pocket Option subscription failed for {actual_asset}"
                 logger.warning("Pocket Option subscribe failed for symbol=%s period=%s", actual_asset, timeframe)
                 _schedule_po_reconnect("subscription failed: no active or usable WebSocket")
                 return None
             _po_subscribed_keys.add(subscription_key)
             _po_subscription_started_at[key] = now
+        trace("subscribed", subscribe_result=True, subscription_active=subscription_key in _po_subscribed_keys)
 
         # Treat incoming ticks as the feed heartbeat. A WebSocket can claim to be
         # connected while no market messages arrive, so check message freshness too.
         ticks = []
         try:
             ticks = client.get_realtime_ticks(actual_asset, limit=5000) or []
-        except Exception:
+        except Exception as tick_exc:
             ticks = []
+            trace("tick_read_error", tick_count=0, last_error_type=type(tick_exc).__name__, last_error_stage="realtime_ticks")
+        trace("ticks_read", tick_count=len(ticks), last_tick_timestamp=(str(ticks[-1][0]) if ticks else None))
         if ticks:
             try:
                 last_ts, last_price = ticks[-1]
@@ -346,7 +376,16 @@ def _fetch_po_bars_blocking(asset, timeframe):
 
         # Historical snapshots are for bootstrapping and gap correction, not every UI poll.
         _po_last_history_fetch = now
-        candles = client.get_historical_candles(actual_asset, timeframe, offset=45000, count_request=1)
+        trace("history_requested", history_count=0)
+        history_started = time.monotonic()
+        try:
+            candles = client.get_historical_candles(actual_asset, timeframe, offset=45000, count_request=1)
+        except Exception as history_exc:
+            trace("history_error", last_error_type=type(history_exc).__name__, last_error_stage="historical_candles",
+                  history_elapsed_seconds=round(time.monotonic() - history_started, 3))
+            raise
+        trace("history_returned", history_count=len(candles or []),
+              history_elapsed_seconds=round(time.monotonic() - history_started, 3))
         if not candles:
             _po_status = f"Connected, but Pocket Option returned no history for {actual_asset} ({timeframe}s)"
             logger.warning("No historical candles returned for symbol=%s period=%s", actual_asset, timeframe)
@@ -383,6 +422,10 @@ def _fetch_po_bars_blocking(asset, timeframe):
         normalized.sort(key=lambda b: b["time"])
         unique = {b["time"]: b for b in normalized}
         normalized = list(unique.values())[-120:]
+        trace("candles_normalized", history_count=len(candles or []),
+              normalized_candle_count=len(normalized),
+              last_candle_timestamp=(normalized[-1]["time"] if normalized else None),
+              last_error_type=None, last_error_stage=None)
         if len(normalized) < 2:
             _po_status = f"Pocket Option returned only {len(normalized)} valid candles for {actual_asset} ({timeframe}s)"
             logger.warning("Insufficient valid bars: symbol=%s period=%s count=%s", actual_asset, timeframe, len(normalized))
@@ -391,6 +434,7 @@ def _fetch_po_bars_blocking(asset, timeframe):
         _po_status = "POCKET OPTION LIVE CANDLES"
         return normalized
     except Exception as e:
+        trace("request_error", last_error_type=type(e).__name__, last_error_stage="fetch_pipeline")
         _po_status = "Pocket Option data request failed; live feed unavailable"
         logger.warning("PO candle request failed (%s); credential details withheld", type(e).__name__)
         # A dropped WebSocket can leave a stale client object that never reconnects.
@@ -656,6 +700,13 @@ def api_diagnostics(asset: str = "NZDUSD", tf: int = 60):
             "status": _po_status,
             "bar_count": len(bars),
             "latest_bar": bars[-1] if bars else None,
+            "feed_debug": dict(_po_feed_debug),
+            "refresh": {
+                "in_progress": bool(_po_refresh_in_progress),
+                "requested_key": list(_po_refresh_key) if _po_refresh_key else None,
+                "age_seconds": round(max(0.0, time.time() - _po_refresh_started_at), 2) if _po_refresh_in_progress and _po_refresh_started_at else None,
+                "watchdog_seconds": _PO_REFRESH_WATCHDOG_SECONDS
+            },
             "broker_exact_symbol_match": broker_match,
             "broker_similar_symbols": [k for k in assets if asset.replace("_otc", "").lower() in str(k).lower()][:20],
             "connection": {
