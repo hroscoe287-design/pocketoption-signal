@@ -176,7 +176,8 @@ class PocketOptionFeed:
 
     def _response(self,asset,tf,bars,updated,verified,reason):
         now=int(time.time())
-        age=now-int(bars[-1]["time"]) if bars else None\n        fresh=bool(bars) and -tf<=age<=max(15,tf*2)
+        age=now-int(bars[-1]["time"]) if bars else None
+        fresh=bool(bars) and -tf<=age<=max(15,tf*2)
         verified=bool(verified and fresh and len(bars)>=2)
         return {"ok":verified,"asset":asset,"timeframe_seconds":tf,"status":reason,
             "verified":verified,"bar_count":len(bars) if verified else 0,
