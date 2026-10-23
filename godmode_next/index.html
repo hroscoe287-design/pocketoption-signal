@@ -38,8 +38,10 @@ function updateEntryCountdown(market,signal,eligible,direction,assetName,tfSecon
  const price=Number(bars[bars.length-1].close);
  const key=assetName+"|"+tfSeconds+"|"+direction;
  if(!trackedEntry||trackedEntry.key!==key){
-   trackedEntry={key,price,direction,triggered:false,createdAt:Date.now(),lastPrice:price};
-   entryCountdownUntil=0;entryAlerted=false;
+   trackedEntry={key,price,direction,triggered:true,createdAt:Date.now(),lastPrice:price};
+   entryCountdownUntil=Date.now()+5000;entryAlerted=false;
+   timer.textContent="5";timer.style.color="var(--cyan)";
+   eta.textContent="VALID SIGNAL • countdown 5 seconds";
  }
  const level=trackedEntry.price,delta=level-price;
  dirEl.textContent=direction+" signal • "+(direction==="BUY"?"CALL / upward":"PUT / downward");
@@ -49,7 +51,7 @@ function updateEntryCountdown(market,signal,eligible,direction,assetName,tfSecon
  // A new signal's entry level is latched from its first fresh, eligible candle.
  // Trigger only when subsequent price reaches/crosses that level in the signal direction.
  const crossed=direction==="BUY"?(trackedEntry.lastPrice<=level&&price>level):(trackedEntry.lastPrice>=level&&price<level);
- if(!trackedEntry.triggered&&crossed){trackedEntry.triggered=true;entryCountdownUntil=Date.now()+5000;entryAlerted=false;timer.textContent="5";timer.style.color="var(--cyan)";eta.textContent="PRICE TOUCHED ENTRY • 5-second countdown";}
+ if(!trackedEntry.triggered&&crossed){trackedEntry.triggered=true;entryCountdownUntil=Date.now()+5000;entryAlerted=false;timer.textContent="5";timer.style.color="var(--cyan)";eta.textContent="PRICE TOUCHED ENTRY • countdown 5 seconds";}
  trackedEntry.lastPrice=price;
  if(trackedEntry.triggered){
    tickEntryClock();
