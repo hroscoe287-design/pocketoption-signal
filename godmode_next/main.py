@@ -78,6 +78,39 @@ def analyze_request(payload:dict):
     # Client-supplied candles are never trusted for live signals.
     return signal(str(payload.get("asset",DEFAULT_ASSET)),int(payload.get("tf",DEFAULT_TIMEFRAME_SECONDS)))
 
+
+# Native live-chart analysis: uses verified broker candles already powering the chart.
+@app.get("/api/live-chart-analysis")
+def live_chart_analysis(asset: str = DEFAULT_ASSET, tf: int = DEFAULT_TIMEFRAME_SECONDS):
+    market = feed.snapshot(asset, tf)
+    if not market.get("verified") or len(market.get("candles", [])) < 60:
+        return {"ok": False, "direction": "WAIT", "asset": asset, "timeframe_seconds": tf,
+                "reason": "Live chart is not verified or has fewer than 60 candles. Reconnect the feed before analysis.",
+                "automatic_execution": False}
+    candles = market["candles"]
+    signal_result = analyze(candles)
+    recent = candles[-30:]
+    closes = [float(c["close"]) for c in candles if c.get("close") is not None]
+    latest = candles[-1]
+    # A compact, transparent market snapshot for analysis; no screenshot or client-supplied prices.
+    change = ((closes[-1] / closes[-min(6, len(closes))]) - 1) * 100 if len(closes) >= 6 and closes[-min(6, len(closes))] else 0
+    highs = [float(c["high"]) for c in recent if c.get("high") is not None]
+    lows = [float(c["low"]) for c in recent if c.get("low") is not None]
+    direction = str(signal_result.get("direction", "WAIT")).upper()
+    if direction not in ("BUY", "SELL"): direction = "WAIT"
+    evidence = signal_result.get("components", {})
+    summary = ("Verified live candles currently align with " + direction if direction != "WAIT"
+               else "Current indicator confluence does not confirm a directional setup; WAIT.")
+    return {"ok": True, "mode": "live-chart-data", "asset": asset, "timeframe_seconds": tf,
+            "direction": direction, "score": signal_result.get("score", 0),
+            "eligible": bool(signal_result.get("eligible")), "reason": signal_result.get("reason", ""),
+            "summary": summary, "latest_price": float(latest["close"]),
+            "latest_candle_time": latest.get("time"), "recent_change_percent": round(change, 5),
+            "recent_resistance": max(highs) if highs else None, "recent_support": min(lows) if lows else None,
+            "indicator_evidence": evidence, "candles_used": len(candles),
+            "feed_verified": True, "automatic_execution": False,
+            "disclaimer": "Analysis uses the verified live candle feed and existing indicator engine. Score is not a win probability."}
+
 # Uploaded-chart visual analysis. This endpoint is advisory only and never places trades.
 from pydantic import BaseModel, Field
 import base64, json, re, urllib.request, urllib.error
