@@ -16,6 +16,14 @@ main{max-width:1150px;margin:auto;padding:18px;display:grid;gap:14px}.row{displa
 <div class="grid wide"><div class="card"><div class="label">CURRENT CONFLUENCE SIGNAL</div><div class="big wait" id="direction">WAIT</div><div class="grade BELOW" id="grade">BELOW THRESHOLD</div><div class="muted" id="reason">Signals require verified live candles and confirmed indicator alignment.</div><div class="muted">Score is confluence, not win probability.</div></div><div class="card"><div class="label">DESIRE • EARLY X</div><div class="big" id="desire">SCANNING</div><div class="big" id="diLeader">DI LEADER: WAITING</div><div class="muted" id="diDetails">+DI — • −DI —</div><div class="muted" id="diMotion">Spread — • Velocity — • Acceleration —</div><div class="muted" id="adxDetail">ADX trend strength —</div></div><div class="card" id="entryCard"><div class="label">ENTRY COUNTDOWN</div><div class="muted" id="entryDirection">WAITING FOR NEXT VALID SIGNAL</div><div class="big" id="entryTarget">Entry level: —</div><div class="entry-clock"><div class="entry-timer-panel"><div id="entryTimer">WAIT</div></div><span class="muted">SECONDS LEFT</span></div><div class="muted" id="entryCurrent">Current price: —</div><div class="muted" id="entryDistance">Distance to entry: —</div><div class="muted" id="entryEstimate">Automatic entry level comes from a fresh eligible signal.</div></div></div>
 <div class="grid wide"><div class="card"><div class="label">EMA 9 / 21</div><div class="big">—</div></div><div class="card"><div class="label">RSI 14</div><div class="big">—</div></div><div class="card"><div class="label">DI+/DI− • ADX</div><div class="big" id="diValues">+DI — / −DI —</div><div class="muted" id="diStatus">Waiting for verified indicator values.</div><div class="muted" id="adxValues">ADX —</div></div></div>
 
+<div class="card wide" id="liveChartAnalyzer">
+  <div class="label">GODMODE AI / NATIVE LIVE CHART ANALYZER</div>
+  <h2 style="margin:8px 0">Analyze the chart already on screen</h2>
+  <p class="muted">No screenshots or uploads. Uses the selected asset, timeframe, and verified live candles feeding the chart above.</p>
+  <div class="row"><button id="liveChartAnalyzeBtn" type="button">ANALYZE LIVE CHART</button><span id="liveChartStatus" class="muted" role="status" aria-live="polite">Ready when live feed is verified.</span></div>
+  <div id="liveChartResult" class="analysis-output" aria-live="polite" style="margin-top:14px"></div>
+  <p class="muted" style="font-size:12px;margin-bottom:0">Signal-only. No screenshot required. Automatic execution remains disabled. If the live feed is disconnected, analysis returns WAIT rather than inventing prices.</p>
+</div>
 <div class="card wide" id="screenshotAnalyzer">
   <div class="label">AI VISION / UPLOADED CHART ANALYZER</div>
   <h2 style="margin:8px 0">Analyze a chart screenshot</h2>
@@ -101,4 +109,36 @@ chartAnalyzeBtn.addEventListener("click",async()=>{
  chartAnalyzeBtn.disabled=true;chartStatus.textContent="Analyzing screenshot…";chartResult.textContent="Reading visible chart structure and indicator evidence. Please wait.";
  try{const response=await fetch("/api/chart-analysis",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({image_data:chartDataUrl,question:document.getElementById("chartQuestion").value})});const data=await response.json();if(!response.ok)throw Error(data.detail||"Analysis request failed ("+response.status+")");renderChartAnalysis(data);chartStatus.textContent="Analysis complete • screenshot only"}catch(error){chartResult.textContent=error.message||"Could not analyze this screenshot.";chartStatus.textContent="Analysis unavailable"}finally{chartAnalyzeBtn.disabled=false}
 });
-\n</script></body></html>
+\n
+const liveChartBtn=document.getElementById("liveChartAnalyzeBtn");
+if(liveChartBtn)liveChartBtn.addEventListener("click",async()=>{
+ const status=document.getElementById("liveChartStatus"),out=document.getElementById("liveChartResult");
+ liveChartBtn.disabled=true;status.textContent="Reading verified live candles…";out.textContent="";
+ try{
+  const q=new URLSearchParams({asset:assetSelect.value||asset,tf:String(tf)});
+  const response=await fetch("/api/live-chart-analysis?"+q.toString(),{cache:"no-store"});
+  const data=await response.json();
+  if(!response.ok)throw Error(data.detail||"Live chart analysis failed.");
+  if(!data.ok){status.textContent="Live feed not verified";out.textContent="WAIT — "+(data.reason||"Reconnect the live feed and try again.");return;}
+  status.textContent="Verified live chart • "+data.candles_used+" candles";
+  const fmt=v=>v==null||!Number.isFinite(Number(v))?"—":Number(v).toLocaleString(undefined,{maximumFractionDigits:6});
+  const evidence=JSON.stringify(data.indicator_evidence||{},null,2);
+  out.innerHTML="";
+  const direction=document.createElement("div");direction.className="analysis-direction "+data.direction;direction.textContent=data.direction;out.appendChild(direction);
+  const lines=[
+   "Asset / timeframe: "+data.asset+" / "+data.timeframe_seconds+"s",
+   "Latest verified price: "+fmt(data.latest_price),
+   "Confluence score: "+fmt(data.score)+" (not win probability)",
+   "Recent price change: "+fmt(data.recent_change_percent)+"%",
+   "Recent resistance: "+fmt(data.recent_resistance),
+   "Recent support: "+fmt(data.recent_support),
+   "Eligible signal: "+(data.eligible?"YES":"NO"),
+   "Reason: "+(data.reason||data.summary||"No additional reason supplied."),
+   "Indicator evidence: "+evidence,
+   data.disclaimer||""
+  ];
+  const body=document.createElement("div");body.className="analysis-output";body.textContent=lines.join("\n");out.appendChild(body);
+ }catch(err){status.textContent="Analysis unavailable";out.textContent=err.message||"Could not analyze live chart."}
+ finally{liveChartBtn.disabled=false}
+});
+</script></body></html>
