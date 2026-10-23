@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pathlib import Path
 import time
+import os
 from engine import analyze
 from feed import feed
 
@@ -21,7 +22,7 @@ def health():
     return {"ok":True,"app":"GODMODE NEXT","mode":"signal-only","automatic_execution":False,
       "live_feed_verified":False,"uptime_seconds":round(time.time()-STARTED,1),"timestamp":datetime.now(timezone.utc).isoformat()}
 @app.get("/api/diagnostics")
-def diagnostics(asset:str="EURUSD_otc",tf:int=5):
+def diagnostics(asset:str=DEFAULT_ASSET,tf:int=DEFAULT_TIMEFRAME_SECONDS):
     result=feed.snapshot(asset,tf)
     return {"ok":result["verified"],"status":result["status"],"requested_asset":asset,
       "timeframe_seconds":tf,"bar_count":result["bar_count"],"latest_bar":result["latest_bar"],
@@ -29,10 +30,10 @@ def diagnostics(asset:str="EURUSD_otc",tf:int=5):
         "verified":result["verified"],"reason":result["status"]},"debug":result["debug"],
       "signals_enabled":result["verified"],"automatic_execution":False}
 @app.get("/api/market")
-def market(asset:str="EURUSD_otc",tf:int=5):
+def market(asset:str=DEFAULT_ASSET,tf:int=DEFAULT_TIMEFRAME_SECONDS):
     return feed.snapshot(asset,tf)
 @app.get("/api/signal")
-def signal(asset:str="EURUSD_otc",tf:int=5):
+def signal(asset:str=DEFAULT_ASSET,tf:int=DEFAULT_TIMEFRAME_SECONDS):
     market=feed.snapshot(asset,tf)
     if not market["verified"]:
         return {"direction":"WAIT","score":0,"eligible":False,"ready":False,
@@ -43,4 +44,4 @@ def signal(asset:str="EURUSD_otc",tf:int=5):
 @app.post("/api/analyze")
 def analyze_request(payload:dict):
     # Client-supplied candles are never trusted for live signals.
-    return signal(str(payload.get("asset","EURUSD_otc")),int(payload.get("tf",5)))
+    return signal(str(payload.get("asset",DEFAULT_ASSET)),int(payload.get("tf",DEFAULT_TIMEFRAME_SECONDS)))
