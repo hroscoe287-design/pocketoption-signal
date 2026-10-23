@@ -176,3 +176,55 @@ def chart_image_analysis(payload: ChartImageRequest):
     analysis["automatic_execution"]=False
     analysis["disclaimer"]="Visual interpretation of a screenshot, not a verified live signal or a win probability."
     return analysis
+
+
+@app.get("/api/win-probability")
+def win_probability(asset: str = DEFAULT_ASSET, tf: int = DEFAULT_TIMEFRAME_SECONDS):
+    """Empirical walk-forward win rate for this exact signal engine and selected timeframe.
+    Each historical prediction is generated only from candles available at that point,
+    then scored against the following candle close. This is a historical statistic, not a guarantee.
+    """
+    market = feed.snapshot(asset, tf)
+    candles = market.get("candles", [])
+    if not market.get("verified") or len(candles) < 75:
+        return {"ok": False, "status": "WAIT", "asset": asset, "timeframe_seconds": tf,
+                "win_probability": None, "sample_size": 0, "minimum_sample": 10,
+                "reason": "Need a verified feed and at least 75 candles before estimating historical win rate.",
+                "automatic_execution": False}
+    wins = {"BUY": 0, "SELL": 0}
+    counts = {"BUY": 0, "SELL": 0}
+    # Replay the real signal engine over past prefixes; never use future candles as input.
+    start = max(60, len(candles) - 180)
+    for i in range(start, len(candles) - 1):
+        try:
+            past = candles[:i]
+            result = analyze(past)
+            raw_direction = str(result.get("direction", "WAIT")).upper()
+            if not result.get("eligible"):
+                continue
+            direction = "BUY" if raw_direction.startswith("BUY") else "SELL" if raw_direction.startswith("SELL") else None
+            if direction is None:
+                continue
+            entry = float(candles[i - 1]["close"])
+            exit_price = float(candles[i]["close"])
+            if not (entry > 0 and exit_price > 0):
+                continue
+            counts[direction] += 1
+            if (direction == "BUY" and exit_price > entry) or (direction == "SELL" and exit_price < entry):
+                wins[direction] += 1
+        except (KeyError, TypeError, ValueError, IndexError):
+            continue
+    total = counts["BUY"] + counts["SELL"]
+    total_wins = wins["BUY"] + wins["SELL"]
+    enough = total >= 10
+    return {"ok": enough, "status": "HISTORICAL WIN RATE" if enough else "INSUFFICIENT SAMPLE",
+            "asset": asset, "timeframe_seconds": tf,
+            "win_probability": round(100 * total_wins / total, 1) if enough else None,
+            "sample_size": total, "wins": total_wins, "losses": total - total_wins,
+            "buy": {"win_rate": round(100 * wins["BUY"] / counts["BUY"], 1) if counts["BUY"] >= 5 else None,
+                    "sample_size": counts["BUY"], "wins": wins["BUY"]},
+            "sell": {"win_rate": round(100 * wins["SELL"] / counts["SELL"], 1) if counts["SELL"] >= 5 else None,
+                     "sample_size": counts["SELL"], "wins": wins["SELL"]},
+            "method": "Walk-forward eligible signals scored against the next candle close; ties count as non-wins.",
+            "reason": "" if enough else "Fewer than 10 eligible historical signals; no percentage shown.",
+            "automatic_execution": False}
