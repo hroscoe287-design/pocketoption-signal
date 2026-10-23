@@ -1,0 +1,23 @@
+name: GODMODE rebuild checks
+
+on:
+  push:
+    branches:
+      - godmode-clean-rebuild
+  pull_request:
+    branches:
+      - main
+      - godmode-clean-rebuild
+
+jobs:
+  safety-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile Python modules
+        run: python -m compileall -q main.py godmode_strategy.py godmode_enhancements.py hybrid_engine.py tests
+      - name: Run signal safety regression tests
+        run: python -m unittest discover -s tests -v
