@@ -43,6 +43,36 @@ def signal(asset:str=DEFAULT_ASSET,tf:int=DEFAULT_TIMEFRAME_SECONDS):
     result=analyze(market["candles"])
     return {**result,"signals_enabled":bool(result.get("eligible")),"asset":asset,"timeframe_seconds":tf,
         "feed_verified":True,"latest_candle_time":market["latest_bar"]["time"]}
+@app.get("/api/assets")
+def assets():
+    """Return the connected broker's actual symbol catalog for the UI dropdown."""
+    client=feed.client
+    if client is None:
+        return {"live":False,"status":feed.status,"count":0,"assets":[]}
+    try:
+        raw=client.get_assets() or {}
+        symbols=set()
+        def add(value):
+            if isinstance(value,str):
+                value=value.strip()
+                if value and not value.isdigit(): symbols.add(value)
+            elif isinstance(value,dict):
+                for field in ("symbol","name","asset","ticker","active_symbol","instrument"):
+                    item=value.get(field)
+                    if isinstance(item,str) and item.strip(): symbols.add(item.strip())
+        if isinstance(raw,dict):
+            for key,value in raw.items():
+                add(key)
+                add(value)
+        elif isinstance(raw,(list,tuple,set)):
+            for item in raw: add(item)
+        try: connected=bool(client.check_connect())
+        except Exception: connected=False
+        ordered=sorted(symbols,key=str.casefold)
+        return {"live":connected and bool(ordered),"status":feed.status,"count":len(ordered),"assets":ordered}
+    except Exception as exc:
+        return {"live":False,"status":"Broker catalog unavailable: "+type(exc).__name__,"count":0,"assets":[]}
+
 @app.post("/api/analyze")
 def analyze_request(payload:dict):
     # Client-supplied candles are never trusted for live signals.
