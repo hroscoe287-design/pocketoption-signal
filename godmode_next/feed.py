@@ -183,14 +183,21 @@ class PocketOptionFeed:
             elif history_error:
                 self.debug={"stage":"history_error","last_error_type":history_error}
             corrected=[]
+            raw_tick_stamps=[]
             for tick in ticks:
                 try:
-                    # Pocket Option stream ticks can be stamped in the broker stream timezone
-                    # rather than UTC. Apply the offset exposed by the connected stream so
-                    # candle times line up with the server UTC clock used by freshness checks.
-                    corrected.append((float(tick[0])-self.offset,float(tick[1])))
+                    raw_stamp=float(tick[0])
+                    raw_tick_stamps.append(raw_stamp)
+                    # Normalize millisecond timestamps before applying the broker's
+                    # stream timezone offset. This keeps the diagnostic clock comparison
+                    # in epoch seconds.
+                    if raw_stamp > 100_000_000_000:
+                        raw_stamp /= 1000.0
+                    corrected.append((raw_stamp-self.offset,float(tick[1])))
                 except (ValueError,TypeError,IndexError):continue
             tickbars=ticks_to_candles(corrected,tf,limit=120)
+            tick_latest=tickbars[-1]["time"] if tickbars else None
+            history_latest=normalized[-1]["time"] if normalized else None
             if len(normalized)<2 and len(tickbars)>=2:normalized=tickbars
             elif normalized and tickbars:
                 bytime={b["time"]:dict(b) for b in normalized}
@@ -212,7 +219,13 @@ class PocketOptionFeed:
             self.status=reason
             self.debug={"stage":"feed_unverified","asset":actual,"timeframe_seconds":tf,"tick_count":len(ticks),
                 "history_count":len(raw or []),"normalized_candle_count":len(normalized),
-                "last_candle_timestamp":normalized[-1]["time"] if normalized else None}
+                "last_candle_timestamp":normalized[-1]["time"] if normalized else None,
+                "last_candle_age_seconds":age,"stream_timezone_offset_seconds":self.offset,
+                "latest_tick_candle_timestamp":tick_latest,
+                "latest_tick_candle_age_seconds":now-tick_latest if tick_latest is not None else None,
+                "latest_history_candle_timestamp":history_latest,
+                "latest_history_candle_age_seconds":now-history_latest if history_latest is not None else None,
+                "raw_tick_timestamp_sample":raw_tick_stamps[-1] if raw_tick_stamps else None}
             return self._response(asset,tf,normalized,0,False,reason)
         except Exception as e:
             self.status="Feed request failed: "+type(e).__name__
