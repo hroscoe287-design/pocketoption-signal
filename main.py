@@ -9,6 +9,7 @@ import math, random, os, json, threading, time, logging, zipfile
 from godmode_strategy import GodModeStrategy
 from godmode_enhancements import analyze as analyze_enhancements
 from hybrid_engine import CombinedEngine
+from market_feed import normalize_historical_candles, ticks_to_candles
 
 _godmode_engine = GodModeStrategy()
 _hybrid_engine = CombinedEngine()
@@ -392,36 +393,28 @@ def _fetch_po_bars_blocking(asset, timeframe):
             # Use only genuine ticks as a fallback; never manufacture live data.
             try:
                 ticks = client.get_realtime_ticks(actual_asset, limit=5000)
-                buckets = {}
-                for ts, price in (ticks or []):
-                    t, p = int(float(ts)), float(price)
-                    bucket = (t // timeframe) * timeframe
-                    bar = buckets.get(bucket)
-                    if bar is None:
-                        buckets[bucket] = {"time": bucket, "open": p, "high": p, "low": p, "close": p}
-                    else:
-                        bar["high"] = max(bar["high"], p)
-                        bar["low"] = min(bar["low"], p)
-                        bar["close"] = p
-                tick_bars = [buckets[k] for k in sorted(buckets)]
+                tick_bars = ticks_to_candles(ticks or [], timeframe, limit=120)
                 if len(tick_bars) >= 2:
-                    normalized = tick_bars[-120:]
-                    _po_last_key, _po_last_fetch, _po_cached_bars = key, now, normalized
+                    _po_last_key, _po_last_fetch, _po_cached_bars = key, now, tick_bars
                     _po_status = f"POCKET OPTION LIVE TICKS — {asset}"
-                    return normalized
-            except Exception:
-                logger.warning("Realtime tick fallback failed for symbol=%s", actual_asset)
+                    _po_feed_debug.update({
+                        "stage": "ticks_fallback_ready",
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                        "tick_count": len(ticks or []),
+                        "normalized_candle_count": len(tick_bars),
+                        "last_candle_timestamp": tick_bars[-1]["time"],
+                    })
+                    return tick_bars
+            except Exception as tick_exc:
+                _po_feed_debug.update({
+                    "stage": "ticks_fallback_error",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "last_error_type": type(tick_exc).__name__,
+                    "last_error_stage": "ticks_fallback",
+                })
+                logger.warning("Realtime tick fallback failed for symbol=%s (%s)", actual_asset, type(tick_exc).__name__)
             return None
-        normalized = []
-        for b in candles:
-            try:
-                t = int(float(b.get("time", b.get("timestamp"))))
-                normalized.append({"time": t, "open": float(b["open"]), "high": float(b["high"]), "low": float(b["low"]), "close": float(b["close"])})
-            except (TypeError, ValueError, KeyError):
-                continue
-        normalized.sort(key=lambda b: b["time"])
-        unique = {b["time"]: b for b in normalized}
-        normalized = list(unique.values())[-120:]
+        normalized = normalize_historical_candles(candles, limit=120)
         trace("candles_normalized", history_count=len(candles or []),
               normalized_candle_count=len(normalized),
               last_candle_timestamp=(normalized[-1]["time"] if normalized else None),
