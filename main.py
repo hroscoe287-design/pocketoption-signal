@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import asyncio
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, Response, FileResponse
 from urllib.request import Request as URLRequest, urlopen
@@ -77,6 +78,40 @@ def _auth_wire_value():
             return '42["auth",' + json.dumps(payload, separators=(",", ":")) + "]"
     return None
 
+def _install_po_threadsafe_sends(client):
+    """Route broker writes onto the WebSocket's owning asyncio loop.
+
+    The upstream synchronous helpers create a new loop in the caller thread.
+    The connected socket belongs to its own loop, so writes must be scheduled
+    there to prevent subscribe/history requests from stalling the live feed.
+    """
+    api = getattr(client, "api", None)
+    if api is None:
+        raise RuntimeError("Pocket Option API object unavailable")
+
+    def send_on_owner_loop(coro_factory, timeout=5.0):
+        loop = getattr(client, "_io_loop", None)
+        if loop is None or not loop.is_running():
+            raise RuntimeError("Pocket Option WebSocket event loop unavailable")
+        future = asyncio.run_coroutine_threadsafe(coro_factory(), loop)
+        try:
+            return future.result(timeout=timeout)
+        except Exception:
+            future.cancel()
+            raise
+
+    def safe_send_websocket_request(name, msg, request_id="", no_force_send=True):
+        payload = f'42{json.dumps(msg)}'
+        return send_on_owner_loop(lambda: api.websocket.send_message(payload))
+
+    def safe_send_subfor(asset):
+        return send_on_owner_loop(lambda: api.websocket.send_subfor(asset))
+
+    api.send_websocket_request = safe_send_websocket_request
+    api.send_subfor = safe_send_subfor
+    logger.info("Installed owner-loop-safe Pocket Option feed writes")
+
+
 def _connect_po():
     global _po_client, _po_status, _po_connect_started
     with _po_lock:
@@ -101,6 +136,8 @@ def _connect_po():
             with _po_lock:
                 _po_connect_started = False
             return
+        # Route subscribe and history requests through the socket's owning loop.
+        _install_po_threadsafe_sends(client)
         # Wait for server clock synchronization; history calls need it.
         deadline = time.time() + 15
         while time.time() < deadline:
