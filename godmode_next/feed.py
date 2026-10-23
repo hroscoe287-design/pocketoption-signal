@@ -23,7 +23,20 @@ class PocketOptionFeed:
     def _auth():
         raw=os.getenv("PO_AUTH_JSON","").strip()
         if not raw:return None
-        if raw.startswith('42["auth",'):return raw
+        if raw.startswith('42["auth",'):
+            # Normalize field order before handing SSID to PocketOptionApi.
+            # Its parser extracts session only when "session" precedes "isDemo".
+            try:
+                packet=json.loads(raw[2:])
+                payload=packet[1] if isinstance(packet,list) and len(packet)>1 and packet[0]=="auth" else None
+                if isinstance(payload,dict) and payload.get("session") and payload.get("uid") is not None:
+                    normalized={"session":payload["session"],"isDemo":payload.get("isDemo",1),"uid":payload["uid"]}
+                    for key,value in payload.items():
+                        if key not in normalized:normalized[key]=value
+                    return '42'+json.dumps(["auth",normalized],separators=(",",":"))
+            except Exception:
+                pass
+            return raw
         try:obj=json.loads(raw)
         except Exception:return None
         if isinstance(obj,str) and obj.startswith('42["auth",'):return obj
