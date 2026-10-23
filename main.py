@@ -78,6 +78,23 @@ def _auth_wire_value():
             return '42["auth",' + json.dumps(payload, separators=(",", ":")) + "]"
     return None
 
+def _po_ticks_to_candles(client, ticks, timeframe, limit=120):
+    """Aggregate broker ticks after correcting its detected stream timezone offset."""
+    sync = getattr(getattr(getattr(client, "api", None), "time_sync", None), "_stream_tz_offset", 0)
+    try:
+        offset = float(sync or 0)
+    except (TypeError, ValueError):
+        offset = 0.0
+    normalized_ticks = []
+    for tick in ticks or []:
+        try:
+            stamp, price = tick[0], tick[1]
+            normalized_ticks.append((float(stamp) - offset, float(price)))
+        except (TypeError, ValueError, IndexError, OverflowError):
+            continue
+    return ticks_to_candles(normalized_ticks, timeframe, limit=limit)
+
+
 def _run_po_call_with_timeout(fn, timeout=7.0):
     """Bound synchronous broker calls so a silent socket cannot pin the market worker."""
     completed = threading.Event()
@@ -421,7 +438,7 @@ def _fetch_po_bars_blocking(asset, timeframe):
         if key == _po_last_key and _po_cached_bars and now - _po_last_history_fetch < _PO_HISTORY_POLL_SECONDS:
             updated = [dict(bar) for bar in _po_cached_bars]
             try:
-                tick_bars = ticks_to_candles(ticks, timeframe, limit=120)
+                tick_bars = _po_ticks_to_candles(client, ticks, timeframe, limit=120)
                 for tick_bar in tick_bars:
                     if tick_bar["time"] < updated[-1]["time"]:
                         continue
@@ -473,7 +490,7 @@ def _fetch_po_bars_blocking(asset, timeframe):
             # Use only genuine ticks as a fallback; never manufacture live data.
             try:
                 ticks = client.get_realtime_ticks(actual_asset, limit=5000)
-                tick_bars = ticks_to_candles(ticks or [], timeframe, limit=120)
+                tick_bars = _po_ticks_to_candles(client, ticks or [], timeframe, limit=120)
                 if len(tick_bars) >= 2:
                     _po_last_key, _po_last_fetch, _po_cached_bars = key, now, tick_bars
                     _po_status = f"POCKET OPTION LIVE TICKS — {asset}"
@@ -505,7 +522,7 @@ def _fetch_po_bars_blocking(asset, timeframe):
             logger.warning("Insufficient valid history bars: symbol=%s period=%s count=%s; trying real ticks", actual_asset, timeframe, history_count)
             try:
                 ticks = client.get_realtime_ticks(actual_asset, limit=5000) or []
-                tick_bars = ticks_to_candles(ticks, timeframe, limit=120)
+                tick_bars = _po_ticks_to_candles(client, ticks, timeframe, limit=120)
                 _po_feed_debug.update({
                     "stage": "history_insufficient_ticks_checked",
                     "updated_at": datetime.now(timezone.utc).isoformat(),
