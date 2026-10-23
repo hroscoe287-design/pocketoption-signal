@@ -129,6 +129,24 @@ class PocketOptionFeed:
                 return
             api=getattr(client,"api",None)
             if api is not None:
+                # Instrument the library's actual updateStream callback and retain
+                # ticks under the broker-provided symbol. This distinguishes a dead
+                # subscription from ticks arriving under a symbol alias.
+                original_tick_callback=getattr(api,"_on_stream_tick",None)
+                if callable(original_tick_callback):
+                    def capture_stream_tick(stream_asset,timestamp,price):
+                        try:
+                            with self.lock:
+                                self.debug.update({
+                                    "last_stream_asset":str(stream_asset)[:80],
+                                    "last_stream_timestamp":float(timestamp),
+                                    "last_stream_price":float(price),
+                                    "stream_tick_seen_at":time.time()
+                                })
+                        except Exception:
+                            pass
+                        return original_tick_callback(stream_asset,timestamp,price)
+                    api._on_stream_tick=capture_stream_tick
                 def on_loop(factory,timeout=5):
                     loop=getattr(client,"_io_loop",None)
                     if loop is None or not loop.is_running():raise RuntimeError("socket event loop unavailable")
@@ -224,7 +242,21 @@ class PocketOptionFeed:
             # waiting for a broker response, which must not prevent live tick polling.
             ticks=[]
             tick_error=None
-            try:ticks=client.get_realtime_ticks(actual,limit=5000) or []
+            try:
+                ticks=client.get_realtime_ticks(actual,limit=5000) or []
+                # Some broker/library builds report a stream symbol that differs
+                # in case or alias from the requested ticker. If so, use the exact
+                # requested key first, then a case-insensitive matching stream key.
+                if not ticks:
+                    api=getattr(client,"api",None)
+                    buffers=getattr(api,"_stream_buffers",{}) if api is not None else {}
+                    if isinstance(buffers,dict):
+                        alias=next((name for name,buf in buffers.items()
+                                    if str(name).casefold()==str(actual).casefold() and buf),None)
+                        if alias is not None:
+                            ticks=list(buffers[alias])[-5000:]
+                            if alias!=actual:
+                                log.info("Using case-insensitive stream symbol alias %s for %s",alias,actual)
             except Exception as e:tick_error=type(e).__name__
 
             # Bound the wait for history and avoid spawning duplicate history requests
