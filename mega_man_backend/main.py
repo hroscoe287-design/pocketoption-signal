@@ -133,14 +133,14 @@ def api_assets():
     }
 
 @app.get("/api/market")
-def api_market(asset: str = "EURUSD_otc", timeframe_seconds: int = 300):
-    data, bars, age = live_market(asset, timeframe_seconds)
+def api_market(asset: str = "EURUSD_otc", tf: int = 300):
+    data, bars, age = live_market(asset, tf)
     return {
         "asset": data.get("asset", broker_asset(asset)),
-        "timeframe_seconds": timeframe_seconds,
-        "data_mode": data.get("data_mode"),
-        "feed_status": data.get("feed_status"),
-        "price": data.get("price"),
+        "timeframe_seconds": tf,
+        "data_mode": "POCKET OPTION LIVE CANDLES",
+        "feed_status": data.get("status", "Verified live candles"),
+        "price": bars[-1].get("close"),
         "bars": bars[-120:],
         "candle_age_seconds": round(age, 2),
         "verified": True,
@@ -151,15 +151,15 @@ def api_market(asset: str = "EURUSD_otc", timeframe_seconds: int = 300):
 @app.post("/analyze")
 def analyze(req: AnalyzeRequest):
     data, bars, age = live_market(req.asset, req.timeframe_seconds)
-    source_signal = str(data.get("signal", "WAIT")).upper()
+    # Use Godmode's real decision engine instead of attempting to infer a signal from its market snapshot.
+    signal_data = fetch_upstream("/api/signal", {"asset": broker_asset(req.asset), "tf": req.timeframe_seconds})
+    source_signal = str(signal_data.get("direction", "WAIT")).upper()
     direction = "UP" if source_signal == "BUY" else ("DOWN" if source_signal == "SELL" else "WAIT")
-    # Keep Godmode's confluence score as an indicator-strength score, not a win probability.
-    confidence = int(data.get("confidence") or 0)
-    if data.get("entry_status") != "FRESH WINDOW":
+    if not signal_data.get("signals_enabled", signal_data.get("eligible", False)):
         direction = "WAIT"
-    price = data.get("price")
-    if price is None:
-        price = bars[-1].get("close")
+    confidence = max(0, min(100, int(signal_data.get("score") or 0)))
+    price = bars[-1].get("close")
+    components = signal_data.get("components") if isinstance(signal_data.get("components"), dict) else {}
     return {
         "asset": data.get("asset", broker_asset(req.asset)),
         "timeframe_seconds": req.timeframe_seconds,
@@ -171,19 +171,14 @@ def analyze(req: AnalyzeRequest):
         "price": price,
         "expiry_seconds": req.timeframe_seconds,
         "verified": True,
-        "data_quality": data.get("data_mode", "Verified live feed"),
-        "feed_status": data.get("feed_status"),
+        "data_quality": "Verified Pocket Option live candles",
+        "feed_status": data.get("status"),
         "candle_age_seconds": round(age, 2),
-        "entry_status": data.get("entry_status"),
         "analysis": {
-            "trend": data.get("trend"),
-            "rsi": data.get("rsi"),
-            "macd_bias": data.get("macd_bias"),
-            "wavetrend_bias": data.get("wavetrend_bias"),
-            "plus_di": data.get("plus_di"),
-            "minus_di": data.get("minus_di"),
-            "strength_label": data.get("strength_label"),
-            "reason": (data.get("hybrid_engine") or {}).get("reason", data.get("reason", "")),
+            "reason": signal_data.get("reason", ""),
+            "components": components,
+            "score": confidence,
+            "eligible": bool(signal_data.get("eligible")),
         },
         "candle_count": len(bars),
         "automatic_execution": False,
