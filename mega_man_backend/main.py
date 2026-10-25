@@ -1,40 +1,33 @@
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Literal
-from urllib.request import Request, urlopen
-from urllib.parse import urlencode
-from urllib.error import HTTPError, URLError
-import json, os, secrets, time
+import os, time
+from feed import feed
+from engine import analyze
 
-app = FastAPI(title="Mega Man Signal API", version="1.1.0")
 FRONTEND = os.getenv("FRONTEND_URL", "https://mega-man-signal-lab.onrender.com").rstrip("/")
-GODMODE_BASE = os.getenv("GODMODE_FEED_BASE", "https://godmode-next-signal-lab.onrender.com").rstrip("/")
+DEFAULT_ASSET = os.getenv("PO_DEFAULT_ASSET", "EURUSD_otc")
+DEFAULT_TF = int(os.getenv("PO_DEFAULT_TIMEFRAME_SECONDS", "5"))
+TIMEFRAMES = {5, 15, 30, 60, 300, 900, 3600}
+STARTED = time.time()
+
+@asynccontextmanager
+async def lifespan(app):
+    feed.start()
+    yield
+
+app = FastAPI(title="Mega Man Signal API", version="2.0.0", lifespan=lifespan)
 origins = [x.strip() for x in os.getenv("CORS_ORIGINS", FRONTEND).split(",") if x.strip()]
 app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=False,
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type", "X-API-Key"],
+    CORSMiddleware, allow_origins=origins, allow_credentials=False,
+    allow_methods=["GET", "POST"], allow_headers=["Content-Type", "X-API-Key"]
 )
 
-TIMEFRAMES = {5, 15, 30, 60, 300, 900, 3600}
-LIVE_MODES = {"POCKET OPTION LIVE CANDLES", "POCKET OPTION LIVE TICKS"}
-
 class AnalyzeRequest(BaseModel):
-    asset: str = Field(min_length=1, max_length=80)
-    timeframe_seconds: int = Field(default=300, ge=5, le=3600)
-
-@app.middleware("http")
-async def protect_api(request, call_next):
-    secret = os.getenv("MEGAMAN_API_KEY", "")
-    if request.url.path == "/analyze" and secret and not secrets.compare_digest(
-        request.headers.get("X-API-Key", ""), secret
-    ):
-        from starlette.responses import JSONResponse
-        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
-    return await call_next(request)
+    asset: str = Field(default=DEFAULT_ASSET, min_length=1, max_length=80)
+    timeframe_seconds: int = Field(default=DEFAULT_TF, ge=5, le=3600)
 
 def broker_asset(value: str) -> str:
     raw = value.strip()
@@ -50,137 +43,136 @@ def broker_asset(value: str) -> str:
     }
     return aliases.get(upper, raw.replace("/", "").replace(" ", ""))
 
-def fetch_upstream(path: str, params: dict | None = None, timeout: float = 90.0):
-    url = GODMODE_BASE + path
-    if params:
-        url += "?" + urlencode(params)
-    req = Request(url, headers={"Accept": "application/json", "User-Agent": "MegaManSignalLab/1.2"}, method="GET")
-    try:
-        with urlopen(req, timeout=timeout) as response:
-            payload = response.read(2_000_000)
-        data = json.loads(payload.decode("utf-8"))
-        if not isinstance(data, dict):
-            raise ValueError("Unexpected feed response")
-        return data
-    except HTTPError as exc:
-        raise HTTPException(status_code=503, detail=f"Godmode Next feed service returned HTTP {exc.code}. Check its live feed status.") from exc
-    except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=503, detail="Could not reach Godmode Next. Its Render service may be waking up or its Pocket Option feed may be disconnected.") from exc
-
-def live_market(asset: str, timeframe_seconds: int):
-    if timeframe_seconds not in TIMEFRAMES:
-        raise HTTPException(status_code=422, detail="Choose a supported timeframe: 5s, 15s, 30s, 1m, 5m, 15m, or 1h.")
-    symbol = broker_asset(asset)
-    # Godmode uses tf and returns candles, verified, and status.
-    data = fetch_upstream("/api/market", {"tf": timeframe_seconds, "asset": symbol})
-    bars = data.get("candles") if isinstance(data.get("candles"), list) else []
-    if not data.get("verified") or len(bars) < 30:
-        raise HTTPException(status_code=503, detail={
-            "message": "Godmode Next has no verified live Pocket Option candles for this asset/timeframe. No signal was generated.",
-            "feed_status": data.get("status", "Live feed unavailable"),
-            "bar_count": len(bars),
-            "automatic_execution": False,
-        })
-    last = bars[-1]
-    try:
-        stamp = float(last["time"])
-        opening, high, low, close = (float(last[k]) for k in ("open", "high", "low", "close"))
-        if stamp > 100_000_000_000:
-            stamp /= 1000
-        now = time.time()
-        if not all(v == v and abs(v) != float("inf") for v in (stamp, opening, high, low, close)):
-            raise ValueError("non-finite candle")
-        age = max(0.0, now - stamp)
-        if low <= 0 or high < max(opening, close, low) or low > min(opening, close, high):
-            raise ValueError("invalid OHLC")
-        if age > max(30, timeframe_seconds * 2):
-            raise HTTPException(status_code=503, detail="Godmode Next candles are stale for this timeframe. No signal was generated.")
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="The latest live candle failed validation. No signal was generated.") from exc
-    return data, bars, age
+def market_snapshot(asset: str, tf: int):
+    if tf not in TIMEFRAMES:
+        raise HTTPException(status_code=422, detail="Choose 5s, 15s, 30s, 1m, 5m, 15m, or 1h.")
+    return feed.snapshot(broker_asset(asset), tf)
 
 @app.get("/")
 def root():
     return {
-        "name": "Mega Man Signal API",
-        "status": "online",
-        "feed_source": "Godmode Next verified Pocket Option feed",
-        "signals": "analysis-only",
-        "automatic_execution": False,
+        "name": "Mega Man Signal API", "status": "online",
+        "feed_source": "Direct Pocket Option connection",
+        "auth_configured": bool(feed._auth()), "signals": "analysis-only",
+        "automatic_execution": False
     }
 
 @app.get("/health")
 def health():
     return {
-        "ok": True,
-        "feed_source_configured": bool(GODMODE_BASE),
-        "feed_source": GODMODE_BASE,
-        "automatic_execution": False,
+        "ok": True, "service": "Mega Man independent feed",
+        "feed_source": "Pocket Option direct", "auth_configured": bool(feed._auth()),
+        "feed_status": feed.status, "uptime_seconds": round(time.time() - STARTED, 1),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "automatic_execution": False
+    }
+
+@app.get("/api/diagnostics")
+def diagnostics(asset: str = DEFAULT_ASSET, tf: int = DEFAULT_TF):
+    result = market_snapshot(asset, tf)
+    return {
+        "ok": bool(result.get("verified")), "status": result.get("status"),
+        "requested_asset": broker_asset(asset), "timeframe_seconds": tf,
+        "bar_count": result.get("bar_count", 0), "latest_bar": result.get("latest_bar"),
+        "feed": {"provider": "Pocket Option", "configured": bool(feed._auth()),
+                 "connected": feed.client is not None, "verified": bool(result.get("verified")),
+                 "reason": result.get("status")},
+        "debug": result.get("debug", {}), "signals_enabled": bool(result.get("verified")),
+        "automatic_execution": False
     }
 
 @app.get("/api/assets")
 def api_assets():
-    data = fetch_upstream("/api/assets", timeout=90)
-    assets = data.get("assets") if isinstance(data.get("assets"), list) else []
-    return {
-        "assets": assets,
-        "count": len(assets),
-        "live": bool(data.get("live")),
-        "status": data.get("status", "Broker catalog status unavailable"),
-        "automatic_execution": False,
-    }
+    client = feed.client
+    if client is None:
+        return {"live": False, "status": feed.status, "count": 0, "assets": [],
+                "automatic_execution": False}
+    try:
+        raw = client.get_assets() or {}
+        symbols = set()
+        def add(value):
+            if isinstance(value, str):
+                value = value.strip()
+                if value and not value.isdigit():
+                    symbols.add(value)
+            elif isinstance(value, dict):
+                for field in ("symbol", "name", "asset", "ticker", "active_symbol", "instrument"):
+                    item = value.get(field)
+                    if isinstance(item, str) and item.strip():
+                        symbols.add(item.strip())
+        if isinstance(raw, dict):
+            for key, value in raw.items():
+                add(key); add(value)
+        elif isinstance(raw, (list, tuple, set)):
+            for item in raw:
+                add(item)
+        try:
+            connected = bool(client.check_connect())
+        except Exception:
+            connected = False
+        assets = sorted(symbols, key=str.casefold)
+        return {"live": connected and bool(assets), "status": feed.status,
+                "count": len(assets), "assets": assets, "automatic_execution": False}
+    except Exception as exc:
+        return {"live": False, "status": "Broker catalog unavailable: " + type(exc).__name__,
+                "count": 0, "assets": [], "automatic_execution": False}
 
 @app.get("/api/market")
-def api_market(asset: str = "EURUSD_otc", tf: int = 300):
-    data, bars, age = live_market(asset, tf)
+def api_market(asset: str = DEFAULT_ASSET, tf: int = DEFAULT_TF):
+    data = market_snapshot(asset, tf)
     return {
-        "asset": data.get("asset", broker_asset(asset)),
-        "timeframe_seconds": tf,
-        "data_mode": "POCKET OPTION LIVE CANDLES",
-        "feed_status": data.get("status", "Verified live candles"),
-        "price": bars[-1].get("close"),
-        "bars": bars[-120:],
-        "candle_age_seconds": round(age, 2),
-        "verified": True,
-        "automatic_execution": False,
+        "asset": data.get("asset", broker_asset(asset)), "timeframe_seconds": tf,
+        "data_mode": "POCKET OPTION LIVE CANDLES" if data.get("verified") else "UNVERIFIED",
+        "feed_status": data.get("status", "Live feed unavailable"),
+        "price": (data.get("latest_bar") or {}).get("close"),
+        "bars": data.get("candles", [])[-120:], "verified": bool(data.get("verified")),
+        "bar_count": data.get("bar_count", 0), "debug": data.get("debug", {}),
+        "automatic_execution": False
     }
 
 @app.post("/api/analyze")
 @app.post("/analyze")
-def analyze(req: AnalyzeRequest):
-    data, bars, age = live_market(req.asset, req.timeframe_seconds)
-    # Use Godmode's real decision engine instead of attempting to infer a signal from its market snapshot.
-    signal_data = fetch_upstream("/api/signal", {"asset": broker_asset(req.asset), "tf": req.timeframe_seconds})
-    source_signal = str(signal_data.get("direction", "WAIT")).upper()
-    direction = "UP" if source_signal == "BUY" else ("DOWN" if source_signal == "SELL" else "WAIT")
-    if not signal_data.get("signals_enabled", signal_data.get("eligible", False)):
+def analyze_request(req: AnalyzeRequest):
+    data = market_snapshot(req.asset, req.timeframe_seconds)
+    candles = data.get("candles", [])
+    if not data.get("verified"):
+        raise HTTPException(status_code=503, detail={
+            "message": "Mega Man's direct Pocket Option feed is not verified yet. No signal was generated.",
+            "feed_status": data.get("status", feed.status),
+            "auth_configured": bool(feed._auth()),
+            "automatic_execution": False
+        })
+    if len(candles) < 60:
+        return {
+            "asset": broker_asset(req.asset), "timeframe_seconds": req.timeframe_seconds,
+            "signal": "WAIT", "direction": "WAIT", "arrow": None, "confidence": 0,
+            "confidence_type": "indicator_strength_not_win_probability",
+            "price": (data.get("latest_bar") or {}).get("close"),
+            "verified": True, "data_quality": "Verified Pocket Option live candles",
+            "feed_status": data.get("status"), "candle_count": len(candles),
+            "analysis": {"reason": "Collecting at least 60 verified candles before analysis.", "components": {}},
+            "automatic_execution": False
+        }
+    result = analyze(candles)
+    raw_direction = str(result.get("direction", "WAIT")).upper()
+    direction = "UP" if raw_direction.startswith("BUY") or "CALL" in raw_direction else (
+        "DOWN" if raw_direction.startswith("SELL") or "PUT" in raw_direction else "WAIT")
+    if not result.get("eligible"):
         direction = "WAIT"
-    confidence = max(0, min(100, int(signal_data.get("score") or 0)))
-    price = bars[-1].get("close")
-    components = signal_data.get("components") if isinstance(signal_data.get("components"), dict) else {}
+    score = max(0, min(100, int(result.get("score") or 0)))
+    if direction == "WAIT":
+        score = 0
+    latest = candles[-1]
     return {
-        "asset": data.get("asset", broker_asset(req.asset)),
-        "timeframe_seconds": req.timeframe_seconds,
-        "signal": direction,
-        "direction": direction,
+        "asset": broker_asset(req.asset), "timeframe_seconds": req.timeframe_seconds,
+        "signal": direction, "direction": direction,
         "arrow": "green_up" if direction == "UP" else ("red_down" if direction == "DOWN" else None),
-        "confidence": confidence if direction != "WAIT" else 0,
-        "confidence_type": "indicator_strength_not_win_probability",
-        "price": price,
-        "expiry_seconds": req.timeframe_seconds,
-        "verified": True,
-        "data_quality": "Verified Pocket Option live candles",
-        "feed_status": data.get("status"),
-        "candle_age_seconds": round(age, 2),
-        "analysis": {
-            "reason": signal_data.get("reason", ""),
-            "components": components,
-            "score": confidence,
-            "eligible": bool(signal_data.get("eligible")),
-        },
-        "candle_count": len(bars),
-        "automatic_execution": False,
-        "disclaimer": "Indicator strength is not a calibrated win probability or guaranteed result. No orders are placed.",
+        "confidence": score, "confidence_type": "indicator_strength_not_win_probability",
+        "price": latest.get("close"), "expiry_seconds": req.timeframe_seconds,
+        "verified": True, "data_quality": "Verified Pocket Option live candles",
+        "feed_status": data.get("status"), "candle_age_seconds": data.get("debug", {}).get("last_candle_age_seconds"),
+        "analysis": {"reason": result.get("reason", ""), "components": result.get("components", {}),
+                     "score": score, "eligible": bool(result.get("eligible"))},
+        "candle_count": len(candles), "automatic_execution": False,
+        "disclaimer": "Indicator strength is not a calibrated win probability or guaranteed result. No orders are placed."
     }
