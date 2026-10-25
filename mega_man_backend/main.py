@@ -29,7 +29,7 @@ class AnalyzeRequest(BaseModel):
 @app.middleware("http")
 async def protect_api(request, call_next):
     secret = os.getenv("MEGAMAN_API_KEY", "")
-    if request.url.path in {"/analyze", "/api/analyze"} and secret and not secrets.compare_digest(
+    if request.url.path == "/analyze" and secret and not secrets.compare_digest(
         request.headers.get("X-API-Key", ""), secret
     ):
         from starlette.responses import JSONResponse
