@@ -40,7 +40,6 @@ def broker_asset(value: str) -> str:
     raw = value.strip()
     compact = "".join(ch for ch in raw if ch.isalnum() or ch == "_")
     upper = compact.upper()
-    # Match the labels shown in Mega Man's dropdown to Pocket Option's symbols.
     aliases = {
         "EURUSDOTC": "EURUSD_otc", "GBPUSDOTC": "GBPUSD_otc",
         "AUDUSDOTC": "AUDUSD_otc", "USDJPYOTC": "USDJPY_otc",
@@ -51,11 +50,11 @@ def broker_asset(value: str) -> str:
     }
     return aliases.get(upper, raw.replace("/", "").replace(" ", ""))
 
-def fetch_upstream(path: str, params: dict | None = None, timeout: float = 22.0):
+def fetch_upstream(path: str, params: dict | None = None, timeout: float = 90.0):
     url = GODMODE_BASE + path
     if params:
         url += "?" + urlencode(params)
-    req = Request(url, headers={"Accept": "application/json", "User-Agent": "MegaManSignalLab/1.1"}, method="GET")
+    req = Request(url, headers={"Accept": "application/json", "User-Agent": "MegaManSignalLab/1.2"}, method="GET")
     try:
         with urlopen(req, timeout=timeout) as response:
             payload = response.read(2_000_000)
@@ -64,41 +63,38 @@ def fetch_upstream(path: str, params: dict | None = None, timeout: float = 22.0)
             raise ValueError("Unexpected feed response")
         return data
     except HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"Pocket Option feed service returned HTTP {exc.code}") from exc
+        raise HTTPException(status_code=503, detail=f"Godmode Next feed service returned HTTP {exc.code}. Check its live feed status.") from exc
     except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=503, detail="Could not reach the Godmode Next live-feed service. Check that its Pocket Option feed is connected.") from exc
+        raise HTTPException(status_code=503, detail="Could not reach Godmode Next. Its Render service may be waking up or its Pocket Option feed may be disconnected.") from exc
 
 def live_market(asset: str, timeframe_seconds: int):
     if timeframe_seconds not in TIMEFRAMES:
         raise HTTPException(status_code=422, detail="Choose a supported timeframe: 5s, 15s, 30s, 1m, 5m, 15m, or 1h.")
-    data = fetch_upstream("/api/market", {"tf": timeframe_seconds, "asset": broker_asset(asset)})
-    mode = str(data.get("data_mode", ""))
-    bars = data.get("bars") if isinstance(data.get("bars"), list) else []
-    if mode not in LIVE_MODES or len(bars) < 30:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "message": "No verified live Pocket Option candles are available for this asset/timeframe. No signal was generated.",
-                "feed_status": data.get("feed_status", mode or "Live feed unavailable"),
-                "bar_count": len(bars),
-                "automatic_execution": False,
-            },
-        )
-    # Verify the final OHLC bar is structurally sound and reasonably fresh.
+    symbol = broker_asset(asset)
+    # Godmode uses tf and returns candles, verified, and status.
+    data = fetch_upstream("/api/market", {"tf": timeframe_seconds, "asset": symbol})
+    bars = data.get("candles") if isinstance(data.get("candles"), list) else []
+    if not data.get("verified") or len(bars) < 30:
+        raise HTTPException(status_code=503, detail={
+            "message": "Godmode Next has no verified live Pocket Option candles for this asset/timeframe. No signal was generated.",
+            "feed_status": data.get("status", "Live feed unavailable"),
+            "bar_count": len(bars),
+            "automatic_execution": False,
+        })
     last = bars[-1]
     try:
         stamp = float(last["time"])
         opening, high, low, close = (float(last[k]) for k in ("open", "high", "low", "close"))
-        now = time.time()
         if stamp > 100_000_000_000:
             stamp /= 1000
-        if not all(map(lambda v: v == v and abs(v) != float("inf"), (stamp, opening, high, low, close))):
+        now = time.time()
+        if not all(v == v and abs(v) != float("inf") for v in (stamp, opening, high, low, close)):
             raise ValueError("non-finite candle")
         age = max(0.0, now - stamp)
         if low <= 0 or high < max(opening, close, low) or low > min(opening, close, high):
             raise ValueError("invalid OHLC")
         if age > max(30, timeframe_seconds * 2):
-            raise HTTPException(status_code=503, detail="Live candles are stale for this timeframe. No signal was generated.")
+            raise HTTPException(status_code=503, detail="Godmode Next candles are stale for this timeframe. No signal was generated.")
     except HTTPException:
         raise
     except Exception as exc:
@@ -126,7 +122,7 @@ def health():
 
 @app.get("/api/assets")
 def api_assets():
-    data = fetch_upstream("/api/assets", timeout=15)
+    data = fetch_upstream("/api/assets", timeout=90)
     assets = data.get("assets") if isinstance(data.get("assets"), list) else []
     return {
         "assets": assets,
