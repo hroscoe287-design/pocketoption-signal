@@ -95,6 +95,43 @@ class PocketOptionFeed:
             pass
         return packet_string
 
+    @staticmethod
+    def auth_status():
+        """Return a safe explanation of auth configuration without exposing credentials."""
+        raw=os.getenv("PO_AUTH_JSON","").strip()
+        if not raw:
+            return "PO_AUTH_JSON is not set on the API service"
+        try:
+            obj=json.loads(raw) if not raw.startswith('42["auth",') else None
+        except Exception:
+            return "PO_AUTH_JSON is not valid JSON or a supported Socket.IO auth packet"
+        if raw.startswith('42["auth",'):
+            try:
+                packet=json.loads(raw[2:])
+                payload=packet[1] if isinstance(packet,list) and len(packet)>1 and packet[0]=="auth" else None
+            except Exception:
+                payload=None
+        elif isinstance(obj,str) and obj.startswith('42["auth",'):
+            try:
+                packet=json.loads(obj[2:])
+                payload=packet[1] if isinstance(packet,list) and len(packet)>1 and packet[0]=="auth" else None
+            except Exception:
+                payload=None
+        elif isinstance(obj,dict):
+            payload=obj.get("auth") if isinstance(obj.get("auth"),dict) else obj
+            ssid=payload.get("ssid") if isinstance(payload,dict) else None
+            if isinstance(ssid,str) and ssid.startswith('42["auth",'):
+                try:
+                    packet=json.loads(ssid[2:])
+                    payload=packet[1] if isinstance(packet,list) and len(packet)>1 and packet[0]=="auth" else None
+                except Exception:
+                    payload=None
+        else:
+            payload=None
+        if not isinstance(payload,dict) or not isinstance(payload.get("session"),str) or not payload.get("session") or payload.get("uid") is None:
+            return "PO_AUTH_JSON must contain a valid session and uid (or a complete supported auth packet)"
+        return "PO_AUTH_JSON is present and has the expected fields; broker acceptance is still unverified"
+
     def start(self):
         with self.lock:
             if self.worker_started:return
@@ -104,7 +141,10 @@ class PocketOptionFeed:
     def _supervisor(self):
         while True:
             try:
-                if self.client is None and self._auth():
+                auth=self._auth()
+                if self.client is None and not auth:
+                    self.status=self.auth_status()
+                elif self.client is None and auth:
                     self._connect()
                 elif self.client is not None:
                     try:
