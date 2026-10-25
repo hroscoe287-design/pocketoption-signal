@@ -23,7 +23,7 @@ def rsi(values,period=14):
     return 100-100/(1+ag/al)
 
 
-def analyze(candles,min_score=75):
+def analyze(candles,min_score=65):
     if len(candles)<60:
         return {"direction":"WAIT","score":0,"ready":False,"eligible":False,"reason":"Need 60 verified candles for stable indicator context","components":{}}
     try:
@@ -92,9 +92,9 @@ def analyze(candles,min_score=75):
     score=min(100,max(0,score))
     early_cross=(prev_spread<=0<di_spread) if direction==1 else ((prev_spread>=0>di_spread) if direction==-1 else False)
     # Avoid late entries and DI whipsaws: require spread direction to reinforce the signal.
-    fakeout=bool(direction and (abs(di_spread)<1.5 or (di_velocity*direction<0 and not early_cross)))
-    eligible=bool(direction and score>=min_score and adx>=12 and not fakeout)
-    reason=("Confluence threshold met" if eligible else "Fakeout risk — WAIT" if fakeout else "ADX trend strength too weak" if adx<12 else f"Confluence below {min_score}/100" if score<min_score else "No directional agreement")
+    fakeout=bool(direction and (abs(di_spread)<1.0 or (di_velocity*direction<0 and abs(di_spread)<3.0 and not early_cross)))
+    eligible=bool(direction and score>=min_score and adx>=10 and not fakeout)
+    reason=("Confluence threshold met" if eligible else "Fakeout risk — WAIT" if fakeout else "ADX trend strength too weak" if adx<10 else f"Confluence below {min_score}/100" if score<min_score else "No directional agreement")
     return {"direction":"BUY/CALL" if direction==1 else "SELL/PUT" if direction==-1 else "WAIT",
       "score":score,"ready":True,"eligible":eligible,"reason":reason,
       "components":{"ema9":round(e9[-1],6),"ema21":round(e21[-1],6),"rsi14":round(rv,2) if rv is not None else None,
