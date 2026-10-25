@@ -181,7 +181,7 @@ def analyze_request(req: AnalyzeRequest):
         "verified": True, "data_quality": "Verified Pocket Option live candles",
         "feed_status": data.get("status"), "candle_age_seconds": data.get("debug", {}).get("last_candle_age_seconds"),
         "analysis": {"reason": result.get("reason", ""), "components": result.get("components", {}),
-                     "score": score, "eligible": bool(result.get("eligible"))},
+                     "stages": result.get("stages", []), "score": score, "eligible": bool(result.get("eligible"))},
         "candle_count": len(candles), "automatic_execution": False,
         "disclaimer": "Indicator strength is not a calibrated win probability or guaranteed result. No orders are placed."
     }
