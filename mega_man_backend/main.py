@@ -53,7 +53,7 @@ def root():
     return {
         "name": "Mega Man Signal API", "status": "online",
         "feed_source": "Direct Pocket Option connection",
-        "auth_configured": bool(feed._auth()), "signals": "analysis-only",
+        "auth_configured": bool(feed._auth()), "auth_status": feed.auth_status(), "feed_status": feed.status, "signals": "analysis-only",
         "automatic_execution": False
     }
 
@@ -62,6 +62,7 @@ def health():
     return {
         "ok": True, "service": "Mega Man independent feed",
         "feed_source": "Pocket Option direct", "auth_configured": bool(feed._auth()),
+        "auth_status": feed.auth_status(),
         "feed_status": feed.status, "uptime_seconds": round(time.time() - STARTED, 1),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "automatic_execution": False
@@ -138,6 +139,7 @@ def analyze_request(req: AnalyzeRequest):
     if not data.get("verified"):
         raise HTTPException(status_code=503, detail={
             "message": "Mega Man's direct Pocket Option feed is not verified yet. No signal was generated.",
+            "auth_status": feed.auth_status(),
             "feed_status": data.get("status", feed.status),
             "auth_configured": bool(feed._auth()),
             "automatic_execution": False
