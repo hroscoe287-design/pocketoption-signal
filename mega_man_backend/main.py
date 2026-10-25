@@ -91,22 +91,29 @@ def api_assets():
     try:
         raw = client.get_assets() or {}
         symbols = set()
+        fields = ("symbol", "name", "asset", "ticker", "active_symbol", "instrument",
+                  "activeSymbol", "asset_name", "assetName")
         def add(value):
             if isinstance(value, str):
                 value = value.strip()
-                if value and not value.isdigit():
+                # Do not discard broker symbols just because they contain digits (e.g. crypto tickers).
+                if value and not value.isdigit() and len(value) <= 80:
                     symbols.add(value)
             elif isinstance(value, dict):
-                for field in ("symbol", "name", "asset", "ticker", "active_symbol", "instrument"):
+                for field in fields:
                     item = value.get(field)
                     if isinstance(item, str) and item.strip():
                         symbols.add(item.strip())
         if isinstance(raw, dict):
             for key, value in raw.items():
-                add(key); add(value)
+                # Catalogs can be symbol->metadata or numeric-id->symbol mappings.
+                add(key)
+                add(value)
         elif isinstance(raw, (list, tuple, set)):
             for item in raw:
                 add(item)
+        # Keep only plausible symbols; metadata-only values are not selectable assets.
+        symbols = {s for s in symbols if len(s) <= 80 and any(ch.isalpha() for ch in s)}
         try:
             connected = bool(client.check_connect())
         except Exception:
