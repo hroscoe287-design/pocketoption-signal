@@ -23,7 +23,7 @@ def rsi(values,period=14):
     return 100-100/(1+ag/al)
 
 
-def analyze(candles,min_score=55):
+def analyze(candles,min_score=55,timeframe_seconds=5):
     if len(candles)<60:
         return {"direction":"WAIT","score":0,"ready":False,"eligible":False,"reason":"Need 60 verified candles for stable indicator context","components":{}}
     try:
@@ -52,10 +52,17 @@ def analyze(candles,min_score=55):
     p14,m14,t14=wilder(plus,14),wilder(minus,14),wilder(tr,14)
     if not p7 or not m7 or not t7 or not t7[-1] or not p14 or not m14 or not t14 or not t14[-1]:
         return {"direction":"WAIT","score":0,"ready":False,"eligible":False,"reason":"Insufficient directional-movement data","components":{}}
+    dip_series=[100*x/y for x,y in zip(p7,t7) if y]
+    dim_series=[100*x/y for x,y in zip(m7,t7) if y]
     dip,dim=100*p7[-1]/t7[-1],100*m7[-1]/t7[-1]
     di_spread=dip-dim
     prev_spread=(100*p7[-2]/t7[-2]-100*m7[-2]/t7[-2]) if len(p7)>1 and t7[-2] else di_spread
     di_velocity=di_spread-prev_spread
+    # On the 5-second chart, do not call a setup bullish if DI+ has begun
+    # rolling over. Use the actual DI+ line slope, not only the DI spread.
+    di_plus_delta=(dip_series[-1]-dip_series[-2]) if len(dip_series)>1 else 0.0
+    di_minus_delta=(dim_series[-1]-dim_series[-2]) if len(dim_series)>1 else 0.0
+    di_plus_turning_down=di_plus_delta < -0.05
     di_accel=di_velocity-((prev_spread-(100*p7[-3]/t7[-3]-100*m7[-3]/t7[-3])) if len(p7)>2 and t7[-3] else di_velocity)
     dip14,dim14=100*p14[-1]/t14[-1],100*m14[-1]/t14[-1]
     dx=[100*abs(a-b)/(a+b) if a+b else 0 for a,b in zip([100*x/y if y else 0 for x,y in zip(p14,t14)],[100*x/y if y else 0 for x,y in zip(m14,t14)])]
@@ -96,11 +103,17 @@ def analyze(candles,min_score=55):
     fractal_direction=1 if fl and close[-1]>high[-4] else -1 if fh and close[-1]<low[-4] else 0
     if fractal_direction==direction and direction:score=min(100,score+5)
     score=min(100,max(0,score))
+    bullish_di_rollover_block=bool(timeframe_seconds<=5 and direction==1 and di_plus_turning_down)
+    # A downward-turning DI+ line on 5s blocks UP, even if other indicators
+    # still look bullish. Final output becomes WAIT until the line turns up again.
+    if bullish_di_rollover_block:
+        direction=0
+        score=0
     early_cross=(prev_spread<=0<di_spread) if direction==1 else ((prev_spread>=0>di_spread) if direction==-1 else False)
     # Avoid late entries and DI whipsaws: require spread direction to reinforce the signal.
     fakeout=bool(direction and (abs(di_spread)<0.6 or (di_velocity*direction<0 and abs(di_spread)<1.8 and not early_cross)))
     eligible=bool(direction and score>=min_score and adx>=8 and not fakeout)
-    reason=("Four-stage confluence threshold met" if eligible else "DI fakeout risk — WAIT" if fakeout else "Trend strength too weak (ADX < 8)" if adx<8 else f"Confluence below {min_score}/100" if score<min_score else "No directional agreement")
+    reason=("5s DI+ turning downward — bullish signal blocked" if bullish_di_rollover_block else "Four-stage confluence threshold met" if eligible else "DI fakeout risk — WAIT" if fakeout else "Trend strength too weak (ADX < 8)" if adx<8 else f"Confluence below {min_score}/100" if score<min_score else "No directional agreement")
     market_context=f"Verified candles: {len(candles)}; EMA trend {'bullish' if e9[-1]>e21[-1] else 'bearish' if e9[-1]<e21[-1] else 'flat'}"
     volatility_context=f"ATR14 {atr14:.6g} ({volatility_pct:.4f}% of price); latest candle body/range {body_ratio:.2f}"
     pattern_context=f"DI spread {di_spread:.2f}, velocity {di_velocity:.2f}; MACD {'positive' if hist>0 else 'negative' if hist<0 else 'flat'}; fractal confirmation {'yes' if fractal_direction==direction and direction else 'no'}"
@@ -118,5 +131,8 @@ def analyze(candles,min_score=55):
       "alligator_jaw":round(jaw,6),"alligator_teeth":round(teeth,6),"alligator_lips":round(lips,6),
       "plus_di_7":round(dip,3),"minus_di_7":round(dim,3),"plus_di_14":round(dip14,3),"minus_di_14":round(dim14,3),
       "adx_14":round(adx,3),"di_spread":round(di_spread,3),"spread_velocity":round(di_velocity,3),
-      "spread_acceleration":round(di_accel,3),"early_cross":early_cross,"fractal_high_confirmed":fh,
+      "spread_acceleration":round(di_accel,3),"di_plus_delta":round(di_plus_delta,3),
+      "di_minus_delta":round(di_minus_delta,3),"di_plus_turning_down":di_plus_turning_down,
+      "bullish_di_rollover_block":bullish_di_rollover_block,"timeframe_seconds":timeframe_seconds,
+      "early_cross":early_cross,"fractal_high_confirmed":fh,
       "fractal_low_confirmed":fl,"fakeout_risk":fakeout,"votes":votes}}
