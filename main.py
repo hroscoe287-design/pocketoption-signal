@@ -688,7 +688,7 @@ def snapshot(tf=None, asset=None):
     di_strength = min(10, int(di_gap / 4))
     fractal_grade = int(hybrid.get("fractal_setup_strength", 0) or 0)
     sonic_ready = signal != "WAIT"
-    strength = min(99, 70 + int(round(fractal_grade * 0.20)) + di_strength +
+    strength = min(99, 76 + int(round(fractal_grade * 0.20)) + di_strength +
                    (4 if hybrid.get("x_quality", 0) >= 3 else 0)) if is_live and sonic_ready else 0
     strength = max(1, min(99, strength + int(hybrid.get("confirmation_adjustment", 0)) +
                           int(hybrid.get("x_quality_adjustment", 0)))) if sonic_ready and is_live else 0
