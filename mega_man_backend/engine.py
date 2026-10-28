@@ -58,11 +58,15 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     di_spread=dip-dim
     prev_spread=(100*p7[-2]/t7[-2]-100*m7[-2]/t7[-2]) if len(p7)>1 and t7[-2] else di_spread
     di_velocity=di_spread-prev_spread
-    # On the 5-second chart, do not call a setup bullish if DI+ has begun
-    # rolling over. Use the actual DI+ line slope, not only the DI spread.
+    # On very short charts, react to direction changes, not just line position.
+    # Use a short multi-bar slope so a single tiny fluctuation is not over-read.
     di_plus_delta=(dip_series[-1]-dip_series[-2]) if len(dip_series)>1 else 0.0
     di_minus_delta=(dim_series[-1]-dim_series[-2]) if len(dim_series)>1 else 0.0
-    di_plus_turning_down=di_plus_delta < -0.05
+    di_plus_falling_two_bars=(len(dip_series)>=3 and dip_series[-1] < dip_series[-2] < dip_series[-3])
+    di_minus_rising_two_bars=(len(dim_series)>=3 and dim_series[-1] > dim_series[-2] > dim_series[-3])
+    macd_hist_series=[a-b for a,b in zip(macd,ms)]
+    macd_fading=(len(macd_hist_series)>=3 and macd_hist_series[-1] < macd_hist_series[-2] < macd_hist_series[-3])
+    di_plus_turning_down=di_plus_delta < -0.03 or di_plus_falling_two_bars
     di_accel=di_velocity-((prev_spread-(100*p7[-3]/t7[-3]-100*m7[-3]/t7[-3])) if len(p7)>2 and t7[-3] else di_velocity)
     dip14,dim14=100*p14[-1]/t14[-1],100*m14[-1]/t14[-1]
     dx=[100*abs(a-b)/(a+b) if a+b else 0 for a,b in zip([100*x/y if y else 0 for x,y in zip(p14,t14)],[100*x/y if y else 0 for x,y in zip(m14,t14)])]
@@ -103,9 +107,11 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     fractal_direction=1 if fl and close[-1]>high[-4] else -1 if fh and close[-1]<low[-4] else 0
     if fractal_direction==direction and direction:score=min(100,score+5)
     score=min(100,max(0,score))
-    bullish_di_rollover_block=bool(timeframe_seconds<=5 and direction==1 and di_plus_turning_down)
-    # A downward-turning DI+ line on 5s blocks UP, even if other indicators
-    # still look bullish. Final output becomes WAIT until the line turns up again.
+    bullish_di_rollover_block=bool(timeframe_seconds<=5 and direction==1 and (
+        di_plus_turning_down or (di_minus_rising_two_bars and macd_fading)
+    ))
+    # On 5s, block UP when DI+ rolls over; also block if DI- is climbing
+    # for two bars while MACD momentum fades. Wait for fresh confirmation.
     if bullish_di_rollover_block:
         direction=0
         score=0
@@ -133,6 +139,8 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
       "adx_14":round(adx,3),"di_spread":round(di_spread,3),"spread_velocity":round(di_velocity,3),
       "spread_acceleration":round(di_accel,3),"di_plus_delta":round(di_plus_delta,3),
       "di_minus_delta":round(di_minus_delta,3),"di_plus_turning_down":di_plus_turning_down,
+      "di_plus_falling_two_bars":di_plus_falling_two_bars,"di_minus_rising_two_bars":di_minus_rising_two_bars,
+      "macd_fading":macd_fading,
       "bullish_di_rollover_block":bullish_di_rollover_block,"timeframe_seconds":timeframe_seconds,
       "early_cross":early_cross,"fractal_high_confirmed":fh,
       "fractal_low_confirmed":fl,"fakeout_risk":fakeout,"votes":votes}}
