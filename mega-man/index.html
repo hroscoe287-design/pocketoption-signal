@@ -76,4 +76,87 @@ async function loadBrokerAssets(){
 $('tf').addEventListener('change',()=>{const n=Number($('tf').value);const label=n<60?n+' sec':n<3600?(n/60)+' min':n<86400?(n/3600)+' hr':'1 day';$('expiryLabel').textContent=label;$('expiry').textContent=n<60?'00:'+String(n).padStart(2,'0'):n<3600?String(Math.floor(n/60)).padStart(2,'0')+':00':n<86400?String(Math.floor(n/3600)).padStart(2,'0')+':00:00':'1 day'});
 function reset(){['up','down'].forEach(id=>$(id).style.filter='brightness(.5)');$('wait').style.filter='none';$('confidence').textContent='—';$('meter').style.width='0%';$('price').textContent='—';$('quality').textContent='UNVERIFIED';$('qdetail').textContent='Live feed not connected';$('engine').textContent='WAITING FOR VERIFIED DATA';}
 loadBrokerAssets();$('generate').addEventListener('click',async()=>{const btn=$('generate');btn.disabled=true;btn.textContent='⟳  ANALYZING MARKET…';$('notice').classList.remove('show');reset();const steps=[['Reading verified market context…','s1'],['Measuring volatility and candle movement…','s2'],['Matching DI, MACD and price patterns…','s3'],['Checking signal eligibility and fakeout risk…','s4']];steps.forEach(([v,id])=>$(id).textContent=v);$('engine').textContent='CHECKING ANALYSIS SERVICE';try{const base=API_BASE;const response=await fetch(base.replace(/\/$/,'')+'/api/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({asset:$('asset').value,timeframe_seconds:Number($('tf').value)})});if(!response.ok){let detail='Analysis service returned HTTP '+response.status;try{const err=await response.json();const v=err.detail;detail=typeof v==='string'?v:(v&&v.message?[v.message,v.feed_status?'Feed: '+v.feed_status:'',v.auth_status?'Auth: '+v.auth_status:''].filter(Boolean).join(' — '):(JSON.stringify(v||err)));}catch(_){}throw new Error(detail)}const d=await response.json();if(!d||!['UP','DOWN','WAIT'].includes(d.signal)||!d.verified)throw new Error('No verified signal was returned. Waiting is safer than guessing.');$('up').style.filter=d.signal==='UP'?'none':'brightness(.5)';$('down').style.filter=d.signal==='DOWN'?'none':'brightness(.5)';$('wait').style.filter=d.signal==='WAIT'?'none':'brightness(.5)';$('confidence').textContent=Number.isFinite(d.confidence)?Math.round(d.confidence)+'%':'—';$('meter').style.width=(Number.isFinite(d.confidence)?Math.max(0,Math.min(100,d.confidence)):0)+'%';$('price').textContent=d.price??'—';$('quality').textContent='VERIFIED';$('qdetail').textContent=d.data_quality||'Verified feed';$('engine').textContent='ANALYSIS COMPLETE';const a=d.analysis||{};const comp=a.components||{};const reason=a.reason||'Verified candle analysis complete.';const stages=Array.isArray(a.stages)?a.stages:[];if(stages.length>=4){['s1','s2','s3','s4'].forEach((id,i)=>$(id).textContent=stages[i].summary||stages[i].name)}else{$('s1').textContent='Verified live candles: '+(d.candle_count??'—');$('s2').textContent='ATR14 '+(comp.atr14??'—')+' · volatility '+(comp.volatility_pct??'—')+'%';$('s3').textContent='DI spread '+(comp.di_spread??'—')+' · MACD/WaveTrend checked';$('s4').textContent=reason+' · manual confirmation only';}const engineNote=document.querySelector('.rightcol .panel:last-child .disclaimer');if(engineNote)engineNote.textContent='Latest analysis: '+reason+' Indicator strength is not a calibrated win probability. Automatic trading remains off.';const tr=document.createElement('tr');[new Date().toLocaleTimeString(),$('asset').value,d.signal,'Pending outcome'].forEach(v=>{const td=document.createElement('td');td.textContent=v;tr.appendChild(td)});if($('history').querySelector('.empty'))$('history').innerHTML='';$('history').prepend(tr)}catch(e){$('engine').textContent='NOT CONNECTED';$('notice').textContent=e.message;$('notice').classList.add('show');$('s1').textContent='Blocked: no verified live market feed';$('s2').textContent='Not calculated';$('s3').textContent='Not calculated';$('s4').textContent='No signal issued';$('s4').textContent='Waiting for API connection'}finally{btn.disabled=false;btn.textContent='⚡  GENERATE SIGNAL'}});
-</script></body></html>
+</script>
+<script id="mega-man-live-di-watch">
+(() => {
+  const $ = id => document.getElementById(id);
+  let busy = false, timer = null, lastKey = "", lastSignalKey = "";
+  const fmt = v => Number.isFinite(Number(v)) ? Number(v).toFixed(2) : "—";
+  function mountWatch() {
+    if (document.getElementById("diWatch")) return;
+    const right = document.querySelector(".rightcol");
+    if (!right) return;
+    const panel = document.createElement("section");
+    panel.className = "panel";
+    panel.id = "diWatch";
+    panel.innerHTML = '<h2>LIVE / ADX + DI WATCH</h2><div class="hint" id="diWatchStatus" aria-live="polite">Starting live line monitor…</div><div class="stats"><div class="stat"><span>DI+ · BUY PRESSURE</span><strong id="livePlus">—</strong><span id="livePlusSlope">Waiting for live data</span></div><div class="stat"><span>DI− · SELL PRESSURE</span><strong id="liveMinus">—</strong><span id="liveMinusSlope">Waiting for live data</span></div><div class="stat"><span>ADX(14) · TREND STRENGTH</span><strong id="liveAdx">—</strong><span id="liveAdxNote">Strength only, not direction</span></div><div class="stat"><span>DI LINE RELATIONSHIP</span><strong id="liveCross">WAIT</strong><span id="liveCrossNote">Watching line movement</span></div></div><div class="disclaimer">Refreshes automatically while this page is open. DI direction and line crosses are monitored separately from ADX strength. Signal-only mode; automatic trading remains OFF.</div>';
+    right.prepend(panel);
+  }
+  function slopeText(delta, fallingTwo, risingTwo, positiveName, negativeName) {
+    if (risingTwo) return "Rising for 2 bars ↑";
+    if (fallingTwo) return "Falling for 2 bars ↓";
+    if (Number(delta) > 0.03) return "Turning upward ↑";
+    if (Number(delta) < -0.03) return "Turning downward ↓";
+    return "Nearly flat ↔";
+  }
+  async function poll() {
+    if (busy || document.visibilityState === "hidden") return;
+    const asset = $("asset")?.value, tf = Number($("tf")?.value || 5);
+    if (!asset) return;
+    busy = true;
+    try {
+      const base = window.MEGA_MAN_API_BASE || "https://mega-man-signal-api.onrender.com";
+      const r = await fetch(base.replace(/\/$/, "") + "/api/analyze", {
+        method: "POST", cache: "no-store",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({asset, timeframe_seconds: tf})
+      });
+      const d = await r.json();
+      if (!r.ok || !d?.verified) throw new Error(d?.detail?.message || d?.detail || "Waiting for verified live candles");
+      const c = d.analysis?.components || {};
+      if (c.plus_di_7 == null || c.minus_di_7 == null || c.adx_14 == null) throw new Error("Waiting for DI/ADX calculations");
+      $("livePlus").textContent = fmt(c.plus_di_7);
+      $("liveMinus").textContent = fmt(c.minus_di_7);
+      $("liveAdx").textContent = fmt(c.adx_14);
+      $("livePlusSlope").textContent = slopeText(c.di_plus_delta, c.di_plus_falling_two_bars, false);
+      $("liveMinusSlope").textContent = slopeText(c.di_minus_delta, false, c.di_minus_rising_two_bars);
+      const spread = Number(c.di_spread);
+      const turningAgainstBuy = !!c.di_plus_turning_down;
+      const minusRising = !!c.di_minus_rising_two_bars;
+      const fading = !!c.macd_fading;
+      let relation = "LINES CLOSE";
+      let note = "Watching for a meaningful cross";
+      if (spread > 0.6) { relation = "DI+ ABOVE DI−"; note = turningAgainstBuy ? "Bullish pressure fading — no blind BUY" : "Buy pressure leads; still confirm momentum"; }
+      else if (spread < -0.6) { relation = "DI− ABOVE DI+"; note = minusRising ? "Sell pressure increasing" : "Sell pressure leads; confirm direction"; }
+      else { relation = "CROSS / TIGHT SPREAD"; note = "No clear directional edge"; }
+      if (turningAgainstBuy || (minusRising && fading)) { relation = "BULLISH MOMENTUM FADING"; note = "DI+ rollover / DI− rise + MACD fade: block premature UP"; }
+      $("liveCross").textContent = relation;
+      $("liveCrossNote").textContent = note;
+      $("diWatchStatus").textContent = "LIVE · " + asset + " · " + (tf < 60 ? tf + "s" : tf < 3600 ? (tf/60) + "m" : (tf/3600) + "h") + " · refreshed " + new Date().toLocaleTimeString();
+      $("diWatchStatus").style.color = "#22ed86";
+      $("liveAdxNote").textContent = Number(c.adx_14) >= 20 ? "Trend strength elevated" : Number(c.adx_14) >= 8 ? "Trend strength moderate/weak" : "Very weak trend";
+      const key = asset + "|" + tf;
+      if (key !== lastKey) { lastKey = key; lastSignalKey = ""; }
+    } catch (e) {
+      const s = $("diWatchStatus");
+      if (s) { s.textContent = "MONITOR WAITING · " + String(e.message || e).slice(0, 150); s.style.color = "#ffca62"; }
+    } finally { busy = false; }
+  }
+  function schedule() {
+    if (timer) clearInterval(timer);
+    poll();
+    timer = setInterval(poll, Number($("tf")?.value || 5) <= 5 ? 1000 : 1500);
+  }
+  function start() {
+    mountWatch();
+    schedule();
+    $("tf")?.addEventListener("change", schedule);
+    $("asset")?.addEventListener("change", poll);
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") poll(); });
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start, {once:true});
+  else start();
+})();
+</script>
+
+</body></html>
