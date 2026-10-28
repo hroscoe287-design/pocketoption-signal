@@ -162,7 +162,7 @@ def analyze_request(req: AnalyzeRequest):
             "analysis": {"reason": "Collecting at least 60 verified candles before analysis.", "components": {}},
             "automatic_execution": False
         }
-    result = analyze(candles)
+    result = analyze(candles, timeframe_seconds=req.timeframe_seconds)
     raw_direction = str(result.get("direction", "WAIT")).upper()
     direction = "UP" if raw_direction.startswith("BUY") or "CALL" in raw_direction else (
         "DOWN" if raw_direction.startswith("SELL") or "PUT" in raw_direction else "WAIT")
