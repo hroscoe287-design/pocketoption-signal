@@ -1,6 +1,7 @@
 """Transparent technical confluence. Score is NOT a win probability."""
 from __future__ import annotations
 from math import isfinite
+from di_forecast import forecast_di
 
 
 def ema(values, period):
@@ -124,6 +125,7 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     volatility_context=f"ATR14 {atr14:.6g} ({volatility_pct:.4f}% of price); latest candle body/range {body_ratio:.2f}"
     pattern_context=f"DI spread {di_spread:.2f}, velocity {di_velocity:.2f}; MACD {'positive' if hist>0 else 'negative' if hist<0 else 'flat'}; fractal confirmation {'yes' if fractal_direction==direction and direction else 'no'}"
     final_context=f"{'BUY/CALL' if direction==1 else 'SELL/PUT' if direction==-1 else 'WAIT'}; score {score}/100; {'eligible for signal' if eligible else reason}"
+    di_projection=forecast_di(dip_series,dim_series,timeframe_seconds)
     return {"direction":"BUY/CALL" if direction==1 else "SELL/PUT" if direction==-1 else "WAIT",
       "score":score,"ready":True,"eligible":eligible,"reason":reason,
       "stages":[
@@ -140,7 +142,7 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
       "spread_acceleration":round(di_accel,3),"di_plus_delta":round(di_plus_delta,3),
       "di_minus_delta":round(di_minus_delta,3),"di_plus_turning_down":di_plus_turning_down,
       "di_plus_falling_two_bars":di_plus_falling_two_bars,"di_minus_rising_two_bars":di_minus_rising_two_bars,
-      "macd_fading":macd_fading,
+      "macd_fading":macd_fading,"di_forecast":di_projection,
       "bullish_di_rollover_block":bullish_di_rollover_block,"timeframe_seconds":timeframe_seconds,
       "early_cross":early_cross,"fractal_high_confirmed":fh,
       "fractal_low_confirmed":fl,"fakeout_risk":fakeout,"votes":votes}}
