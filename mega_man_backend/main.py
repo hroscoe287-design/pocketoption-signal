@@ -3,7 +3,8 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-import os, time
+import os, time, socket
+from urllib.parse import urlparse
 from feed import feed
 from engine import analyze
 
@@ -79,6 +80,35 @@ def diagnostics(asset: str = DEFAULT_ASSET, tf: int = DEFAULT_TF):
                  "connected": feed.client is not None, "verified": bool(result.get("verified")),
                  "reason": result.get("status")},
         "debug": result.get("debug", {}), "signals_enabled": bool(result.get("verified")),
+        "automatic_execution": False
+    }
+
+@app.get("/api/network-diagnostics")
+def network_diagnostics():
+    """Credential-free DNS check for the LIVE WebSocket hosts used by the installed client."""
+    try:
+        from pocketoptionapi.constants import REGION
+        urls = list(REGION().get_real_servers(randomize=False))
+    except Exception as exc:
+        return {"ok": False, "error": type(exc).__name__, "automatic_execution": False}
+    results = []
+    for url in urls:
+        host = urlparse(url).hostname
+        item = {"host": host, "port": 443, "dns_ok": False, "address_count": 0}
+        try:
+            addresses = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+            unique = sorted({entry[4][0] for entry in addresses})
+            item.update({"dns_ok": bool(unique), "address_count": len(unique)})
+        except socket.gaierror as exc:
+            item["error"] = "DNS_" + str(exc.errno)
+        except Exception as exc:
+            item["error"] = type(exc).__name__
+        results.append(item)
+    return {
+        "ok": any(item["dns_ok"] for item in results),
+        "mode": "LIVE endpoint DNS only",
+        "servers": results,
+        "credentials_used": False,
         "automatic_execution": False
     }
 
