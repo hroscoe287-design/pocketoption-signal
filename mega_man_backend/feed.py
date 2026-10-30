@@ -6,6 +6,40 @@ from market_feed import normalize_historical_candles, ticks_to_candles
 
 log=logging.getLogger("godmode.next.feed")
 
+def _configure_direct_websocket_transport():
+    """Disable websockets' implicit environment-proxy discovery for Pocket Option.
+
+    Pocket Option's region probe uses direct asyncio TCP connections. Match that
+    behavior for the actual WebSocket handshake so a host-level HTTPS_PROXY or
+    ALL_PROXY cannot silently send the broker socket down a different route.
+    Only report whether proxy settings exist; never expose their values.
+    """
+    proxy_names = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy",
+                   "ALL_PROXY", "all_proxy")
+    proxy_configured = any(os.getenv(name) for name in proxy_names)
+    try:
+        import inspect
+        import websockets
+        connect = websockets.connect
+        if getattr(connect, "_mega_man_direct_egress", False):
+            return {"mode": "direct", "proxy_environment_configured": proxy_configured}
+        if "proxy" not in inspect.signature(connect).parameters:
+            return {"mode": "library_default", "proxy_environment_configured": proxy_configured}
+
+        def direct_connect(*args, **kwargs):
+            kwargs.setdefault("proxy", None)
+            return connect(*args, **kwargs)
+
+        direct_connect._mega_man_direct_egress = True
+        websockets.connect = direct_connect
+        log.info("Mega Man Pocket Option WebSocket egress=direct; proxy environment configured=%s",
+                 proxy_configured)
+        return {"mode": "direct", "proxy_environment_configured": proxy_configured}
+    except Exception as exc:
+        log.warning("Could not configure direct WebSocket egress (%s)", type(exc).__name__)
+        return {"mode": "library_default", "proxy_environment_configured": proxy_configured}
+
+
 def _safe_connection_detail(value):
     """Keep useful transport errors while stripping credentials and URL queries."""
     import re
@@ -174,6 +208,7 @@ class PocketOptionFeed:
             if self.connecting:return
             self.connecting=True
         try:
+            transport_mode=_configure_direct_websocket_transport()
             from pocketoptionapi import PocketOption
             client=PocketOption(self._auth())
             ok,err=client.connect()
@@ -207,6 +242,8 @@ class PocketOptionFeed:
                     "auth_session_length":len(getattr(ws_client,"session","") or ""),
                     "upstream_error":upstream_reason,
                     "websocket_thread_alive":thread_alive,
+                    "websocket_egress":transport_mode.get("mode","unknown"),
+                    "proxy_environment_configured":transport_mode.get("proxy_environment_configured",False),
                     "automatic_execution":False
                 }
                 self.status="Pocket Option connection failed: "+detail
