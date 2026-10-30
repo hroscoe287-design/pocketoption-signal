@@ -68,10 +68,17 @@ def _install_safe_protocol_trace():
             elif message.startswith("42") and "NotAuthorized" in message:
                 phase = "auth_rejected"
             elif message.startswith("42"):
-                phase = "socketio_event_received"
+                try:
+                    packet = json.loads(message[2:])
+                    event_name = packet[0] if isinstance(packet, list) and packet else "unknown"
+                    phase = "socketio_event:" + str(event_name)[:40]
+                except Exception:
+                    phase = "socketio_event_unparsed"
         self._mega_man_last_phase = phase
-        if phase != "engineio_ping_received":
-            log.info("Pocket Option protocol phase=%s", phase)
+        events = getattr(self, "_mega_man_protocol_events", [])
+        if phase != "engineio_ping_received" and len(events) < 20:
+            events.append(phase)
+            self._mega_man_protocol_events = events
         return await current(self, message)
 
     traced._mega_man_protocol_trace = True
@@ -293,6 +300,8 @@ class PocketOptionFeed:
                     "account_mode":"demo" if getattr(ws_client,"is_demo",None) is True else ("live" if getattr(ws_client,"is_demo",None) is False else "unknown"),
                     "auth_uid_present":getattr(ws_client,"uid",None) is not None,
                     "protocol_phase":getattr(ws_client,"_mega_man_last_phase","no_inbound_message"),
+                    "protocol_events":getattr(ws_client,"_mega_man_protocol_events",[])[:20],
+                    "auth_session_present":bool(getattr(ws_client,"session","")),
                     "auth_session_length":len(getattr(ws_client,"session","") or ""),
                     "upstream_error":upstream_reason,
                     "websocket_thread_alive":thread_alive,
