@@ -179,11 +179,44 @@ class PocketOptionFeed:
             ok,err=client.connect()
             if not ok:
                 detail=_safe_connection_detail(err)
+                # Capture transport state from the upstream client without exposing SSID/session data.
+                ws_client=getattr(getattr(client,"api",None),"websocket",None)
+                try:
+                    import pocketoptionapi.global_value as global_value
+                    upstream_reason=_safe_connection_detail(getattr(global_value,"websocket_error_reason",None))
+                except Exception:
+                    upstream_reason="unavailable"
+                try:
+                    parsed_url=getattr(ws_client,"url",None)
+                    from urllib.parse import urlparse
+                    server_host=urlparse(parsed_url).hostname if parsed_url else None
+                except Exception:
+                    server_host=None
+                try:
+                    thread_alive=bool(getattr(client,"websocket_thread",None) and client.websocket_thread.is_alive())
+                except Exception:
+                    thread_alive=False
+                transport_debug={
+                    "stage":"websocket_connect_failed",
+                    "error_type":type(err).__name__ if err else "unknown",
+                    "error_detail":detail,
+                    "server_host":server_host,
+                    "reconnect_attempts":getattr(ws_client,"reconnect_attempts",None),
+                    "account_mode":"demo" if getattr(ws_client,"is_demo",None) is True else ("live" if getattr(ws_client,"is_demo",None) is False else "unknown"),
+                    "auth_uid_present":getattr(ws_client,"uid",None) is not None,
+                    "auth_session_length":len(getattr(ws_client,"session","") or ""),
+                    "upstream_error":upstream_reason,
+                    "websocket_thread_alive":thread_alive,
+                    "automatic_execution":False
+                }
                 self.status="Pocket Option connection failed: "+detail
-                self.debug={"stage":"websocket_connect_failed","error_type":type(err).__name__ if err else "unknown",
-                            "error_detail":detail,"automatic_execution":False}
-                log.warning("PO WebSocket connect failed; type=%s detail=%s",
-                            type(err).__name__ if err else "unknown",detail)
+                self.debug=transport_debug
+                log.warning("PO WebSocket connect failed; type=%s detail=%s transport=%s",
+                            type(err).__name__ if err else "unknown",detail,
+                            {k:v for k,v in transport_debug.items() if k not in ("auth_session_length",)})
+                # Avoid leaving a failed client's background event loop running between retries.
+                try:client.disconnect_websocket(timeout=2.0)
+                except Exception:pass
                 return
             api=getattr(client,"api",None)
             if api is not None:
