@@ -40,6 +40,17 @@ def _configure_direct_websocket_transport():
         return {"mode": "library_default", "proxy_environment_configured": proxy_configured}
 
 
+def _normalize_demo_flag(value):
+    """Accept only Pocket Option's documented 0=live / 1=demo flag."""
+    if isinstance(value, bool):
+        return int(value)
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return 1
+    return parsed if parsed in (0, 1) else 1
+
+
 def _safe_connection_detail(value):
     """Keep useful transport errors while stripping credentials and URL queries."""
     import re
@@ -84,7 +95,7 @@ class PocketOptionFeed:
             uid=payload.get("uid")
             if not isinstance(session,str) or not session or uid is None:return None
             # Keep the parser-required order stable regardless of the JSON the user pasted.
-            normalized={"session":session,"isDemo":0,"uid":uid}
+            normalized={"session":session,"isDemo":_normalize_demo_flag(payload.get("isDemo",1)),"uid":uid}
             for key,value in payload.items():
                 if key not in normalized:normalized[key]=value
             normalized.setdefault("platform",2)
@@ -132,7 +143,7 @@ class PocketOptionFeed:
                 session=payload.get("session")
                 uid=payload.get("uid")
                 if isinstance(session,str) and session and uid is not None:
-                    normalized={"session":session,"isDemo":0,"uid":uid}
+                    normalized={"session":session,"isDemo":_normalize_demo_flag(payload.get("isDemo",1)),"uid":uid}
                     for key,value in payload.items():
                         if key not in normalized:normalized[key]=value
                     normalized.setdefault("platform",2)
@@ -178,7 +189,10 @@ class PocketOptionFeed:
             payload=None
         if not isinstance(payload,dict) or not isinstance(payload.get("session"),str) or not payload.get("session") or payload.get("uid") is None:
             return "PO_AUTH_JSON must contain a valid session and uid (or a complete supported auth packet)"
-        return "PO_AUTH_JSON is present and has the expected fields; broker acceptance is still unverified"
+        demo_flag=_normalize_demo_flag(payload.get("isDemo",1))
+        mode_label="demo" if demo_flag else "live"
+        mode_source="explicit isDemo flag" if "isDemo" in payload else "safe default (demo)"
+        return f"PO_AUTH_JSON is present and has the expected fields; account mode is {mode_label} ({mode_source}); broker acceptance is still unverified"
 
     def start(self):
         with self.lock:
