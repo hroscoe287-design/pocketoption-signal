@@ -17,6 +17,10 @@ class PocketOptionFeed:
         self.subscribed=set()
         self.subscription_times={}
         self.history_pending=set()
+        # PocketOptionAPI uses one shared history event/buffer; serialize history
+        # requests and retain completed results for the next HTTP poll.
+        self.history_request_lock=threading.Lock()
+        self.history_results={}
         self.offset=0.0
         self.worker_started=False
 
@@ -239,30 +243,44 @@ class PocketOptionFeed:
             actual=asset
             try:
                 catalog=client.get_assets() or {}
-                # Broker library versions return catalogs in different shapes:
-                # symbol->metadata mappings, numeric-id->symbol mappings, or lists of records.
-                candidates=[]
-                def add_candidate(value):
-                    if isinstance(value,str):
-                        value=value.strip()
-                        if value:candidates.append(value)
-                    elif isinstance(value,dict):
-                        for field in ("symbol","name","asset","ticker","active_symbol","instrument"):
-                            item=value.get(field)
-                            if isinstance(item,str) and item.strip():candidates.append(item.strip())
+                # Catalog keys are broker symbols; metadata names are display labels
+                # (for example "Gold"). Resolve display labels to the real symbol.
+                records=[]
+                def add_record(symbol,value=None):
+                    if isinstance(symbol,str) and symbol.strip():
+                        meta=value if isinstance(value,dict) else {}
+                        records.append((symbol.strip(),meta))
+                    elif isinstance(value,str) and value.strip():
+                        records.append((value.strip(),{}))
                 if isinstance(catalog,dict):
-                    for key,value in catalog.items():
-                        add_candidate(key)
-                        add_candidate(value)
+                    for key,value in catalog.items():add_record(key,value)
                 elif isinstance(catalog,(list,tuple,set)):
-                    for item in catalog:add_candidate(item)
-                match=next((s for s in candidates if s.casefold()==asset.strip().casefold()),None)
-                if candidates and not match:
-                    # Do not reject an asset based on an unrecognized catalog record shape.
-                    # Let the broker subscription/history calls be the source of truth.
-                    log.info("Requested symbol not directly matched in catalog; trying broker subscription for %s",asset)
-                if match:actual=match
-            except Exception:pass
+                    for item in catalog:
+                        if isinstance(item,dict):
+                            symbol=next((item.get(k) for k in ("symbol","ticker","active_symbol","asset","instrument") if isinstance(item.get(k),str)),None)
+                            add_record(symbol,item)
+                        elif isinstance(item,str):add_record(item,{})
+                requested=asset.strip().casefold()
+                exact=next((symbol for symbol,meta in records
+                            if symbol.casefold()==requested or str(meta.get("name","")).strip().casefold()==requested),None)
+                if exact:
+                    actual=exact
+                elif requested in ("gold","xau","xauusd","xau/usd"):
+                    gold=[(symbol,meta) for symbol,meta in records
+                          if "gold" in str(meta.get("name","")).casefold()
+                          or symbol.replace("_","").casefold().startswith("xau")]
+                    if gold:
+                        def rank(item):
+                            symbol,meta=item
+                            available=meta.get("is_available",True) is not False
+                            supported=not meta.get("timeframes") or tf in meta.get("timeframes",[])
+                            otc=symbol.casefold().endswith("_otc")
+                            return (not available,not supported,otc,symbol.casefold())
+                        actual=sorted(gold,key=rank)[0][0]
+                if actual==asset and records:
+                    log.info("Requested label did not resolve to a catalog symbol: %s",asset)
+            except Exception as exc:
+                log.info("Broker symbol resolution unavailable (%s)",type(exc).__name__)
             sub=(actual,tf)
             # Re-issue the broker subscription periodically. A successful WebSocket
             # connection does not guarantee that the stream subscription stayed live;
@@ -304,21 +322,35 @@ class PocketOptionFeed:
             raw=None
             history_error=None
             with self.lock:
-                request_history=sub not in self.history_pending
+                history_result=self.history_results.pop(sub,None)
+                request_history=history_result is None and sub not in self.history_pending
                 if request_history:self.history_pending.add(sub)
             if request_history:
-                result={"raw":None,"error":None}
                 finished=threading.Event()
                 def load_history():
-                    try:result["raw"]=client.get_historical_candles(actual,tf,offset=45000,count_request=1)
+                    result={"raw":None,"error":None}
+                    try:
+                        # The upstream library waits up to 10s per history request.
+                        # A 2s caller wait discarded successful responses and made
+                        # the endpoint report an empty feed while the request was still running.
+                        with self.history_request_lock:
+                            result["raw"]=client.get_historical_candles(actual,tf,offset=9000,count_request=1)
                     except Exception as e:result["error"]=type(e).__name__
                     finally:
-                        with self.lock:self.history_pending.discard(sub)
+                        with self.lock:
+                            self.history_pending.discard(sub)
+                            self.history_results[sub]=result
                         finished.set()
-                threading.Thread(target=load_history,daemon=True,name="godmode-history-request").start()
-                if finished.wait(2.0):
-                    raw=result["raw"]
-                    history_error=result["error"]
+                threading.Thread(target=load_history,daemon=True,name="mega-man-history-request").start()
+                finished.wait(11.5)
+            # Consume the result even if the upstream request completed just after
+            # this HTTP poll's wait; otherwise the next poll can reuse it safely.
+            with self.lock:
+                if history_result is None:
+                    history_result=self.history_results.pop(sub,None)
+            if history_result:
+                raw=history_result.get("raw")
+                history_error=history_result.get("error")
             normalized=normalize_historical_candles(raw or [],limit=120)
             # Some Pocket Option history responses use a broker-local clock shifted
             # by whole hours. Infer only a stable, near-whole-hour FUTURE skew; never
