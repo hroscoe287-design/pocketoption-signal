@@ -40,6 +40,44 @@ def _configure_direct_websocket_transport():
         return {"mode": "library_default", "proxy_environment_configured": proxy_configured}
 
 
+def _install_safe_protocol_trace():
+    """Trace Engine.IO / Socket.IO phases without logging packet contents."""
+    from pocketoptionapi.ws.client import WebsocketClient
+    current = WebsocketClient._handle_text_message
+    if getattr(current, "_mega_man_protocol_trace", False):
+        return
+
+    async def traced(self, message):
+        phase = "other_text"
+        if isinstance(message, str):
+            if message.startswith('0{"sid":'):
+                phase = "engineio_open_received"
+            elif message == "2":
+                phase = "engineio_ping_received"
+            elif message.startswith('40{"sid":'):
+                phase = "socketio_namespace_connected_auth_sent"
+            elif message == "41":
+                phase = "socketio_namespace_disconnected"
+            elif message.startswith("451-["):
+                try:
+                    packet = json.loads(message.split("-", 1)[1])
+                    event_name = packet[0] if isinstance(packet, list) and packet else "unknown"
+                    phase = "binary_event_header:" + str(event_name)[:40]
+                except Exception:
+                    phase = "binary_event_header_unparsed"
+            elif message.startswith("42") and "NotAuthorized" in message:
+                phase = "auth_rejected"
+            elif message.startswith("42"):
+                phase = "socketio_event_received"
+        self._mega_man_last_phase = phase
+        if phase != "engineio_ping_received":
+            log.info("Pocket Option protocol phase=%s", phase)
+        return await current(self, message)
+
+    traced._mega_man_protocol_trace = True
+    WebsocketClient._handle_text_message = traced
+
+
 def _normalize_demo_flag(value):
     """Accept only Pocket Option's documented 0=live / 1=demo flag."""
     if isinstance(value, bool):
@@ -224,6 +262,7 @@ class PocketOptionFeed:
         try:
             transport_mode=_configure_direct_websocket_transport()
             from pocketoptionapi import PocketOption
+            _install_safe_protocol_trace()
             client=PocketOption(self._auth())
             ok,err=client.connect()
             if not ok:
@@ -253,6 +292,7 @@ class PocketOptionFeed:
                     "reconnect_attempts":getattr(ws_client,"reconnect_attempts",None),
                     "account_mode":"demo" if getattr(ws_client,"is_demo",None) is True else ("live" if getattr(ws_client,"is_demo",None) is False else "unknown"),
                     "auth_uid_present":getattr(ws_client,"uid",None) is not None,
+                    "protocol_phase":getattr(ws_client,"_mega_man_last_phase","no_inbound_message"),
                     "auth_session_length":len(getattr(ws_client,"session","") or ""),
                     "upstream_error":upstream_reason,
                     "websocket_thread_alive":thread_alive,
