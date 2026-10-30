@@ -5,6 +5,16 @@ from datetime import datetime, timezone
 from market_feed import normalize_historical_candles, ticks_to_candles
 
 log=logging.getLogger("godmode.next.feed")
+
+def _safe_connection_detail(value):
+    """Keep useful transport errors while stripping credentials and URL queries."""
+    import re
+    if value is None:
+        return "no detail returned"
+    detail=str(value)[:500]
+    detail=re.sub(r'(?i)(session|ssid|token|password|authorization|cookie)(["\\s:=]+)[^,;\\s}]+',r'\\1\\2[redacted]',detail)
+    detail=re.sub(r'(wss?://[^\\s?]+)\\?[^\\s]+',r'\\1?[redacted]',detail)
+    return detail
 class PocketOptionFeed:
     def __init__(self):
         self.lock=threading.RLock()
@@ -168,8 +178,12 @@ class PocketOptionFeed:
             client=PocketOption(self._auth())
             ok,err=client.connect()
             if not ok:
-                self.status="Pocket Option connection failed"
-                log.warning("PO connect failed (%s)",type(err).__name__ if err else "unknown")
+                detail=_safe_connection_detail(err)
+                self.status="Pocket Option connection failed: "+detail
+                self.debug={"stage":"websocket_connect_failed","error_type":type(err).__name__ if err else "unknown",
+                            "error_detail":detail,"automatic_execution":False}
+                log.warning("PO WebSocket connect failed; type=%s detail=%s",
+                            type(err).__name__ if err else "unknown",detail)
                 return
             api=getattr(client,"api",None)
             if api is not None:
@@ -210,8 +224,11 @@ class PocketOptionFeed:
             with self.lock:self.client=client;self.subscribed.clear();self.subscription_times.clear()
             self.status="Connected; waiting for symbol subscription"
         except Exception as e:
-            self.status="Pocket Option client unavailable or auth rejected: "+type(e).__name__
-            log.warning("PO client setup failed (%s)",type(e).__name__)
+            detail=_safe_connection_detail(e)
+            self.status="Pocket Option client setup failed: "+detail
+            self.debug={"stage":"client_setup_failed","error_type":type(e).__name__,
+                        "error_detail":detail,"automatic_execution":False}
+            log.warning("PO client setup failed; type=%s detail=%s",type(e).__name__,detail)
         finally:
             with self.lock:self.connecting=False
 
