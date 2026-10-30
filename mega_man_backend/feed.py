@@ -175,6 +175,20 @@ class PocketOptionFeed:
             self.connecting=True
         try:
             from pocketoptionapi import PocketOption
+            # The library's default WebSocket handshake timeout is only 8s.
+            # Render's TCP/TLS checks pass, but the broker handshake is timing out;
+            # allow a longer handshake window without changing auth or server URLs.
+            try:
+                import pocketoptionapi.ws.client as po_ws_module
+                original_ws_connect=po_ws_module.websockets.connect
+                if not getattr(po_ws_module.websockets.connect,"_mega_man_timeout_patch",False):
+                    def _mega_man_ws_connect(*args,**kwargs):
+                        kwargs["open_timeout"]=max(float(kwargs.get("open_timeout",8) or 8),25.0)
+                        return original_ws_connect(*args,**kwargs)
+                    _mega_man_ws_connect._mega_man_timeout_patch=True
+                    po_ws_module.websockets.connect=_mega_man_ws_connect
+            except Exception as patch_error:
+                log.info("WebSocket timeout tuning unavailable (%s)",type(patch_error).__name__)
             client=PocketOption(self._auth())
             ok,err=client.connect()
             if not ok:
