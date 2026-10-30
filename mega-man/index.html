@@ -30,6 +30,7 @@
 <header class="hero"><div class="head"><svg class="bot" viewBox="0 0 100 120" role="img" aria-label="Original futuristic armored robot illustration"><defs><linearGradient id="armor" x1="0" x2="1"><stop stop-color="#39e0ff"/><stop offset=".45" stop-color="#1356b7"/><stop offset="1" stop-color="#07172e"/></linearGradient></defs><path d="M26 34 18 18 37 23 50 5 64 23 83 16 75 39 83 61 72 91 50 108 28 91 17 61Z" fill="url(#armor)" stroke="#83eaff" stroke-width="2"/><path d="M28 40 50 29 72 40 67 63 50 76 33 63Z" fill="#06172a" stroke="#51cfff" stroke-width="2"/><path d="M32 49 47 45 44 54 31 56Z M53 45 68 49 69 56 56 54Z" fill="#4cf7ff"/><path d="M43 67 50 60 57 67 50 72Z" fill="#ffcb63"/><path d="M25 78 12 89 21 107 38 99 42 83 M75 78 88 89 79 107 62 99 58 83" fill="url(#armor)" stroke="#5bdcff" stroke-width="2"/><path d="M42 83 50 91 58 83 61 103 50 115 39 103Z" fill="#0b2d56" stroke="#40baff" stroke-width="2"/></svg><div><div class="brand">INDEPENDENT AI SIGNAL SYSTEM</div><h1>MEGA MAN<br><span style="color:#2dcaff">BOT</span></h1><div class="sub">AI SIGNAL LAB · ANALYZE BEFORE YOU ACT</div><span class="tag">◆ SIGNAL-ONLY MODE · AUTO-TRADING OFF</span></div></div></header>
 <div class="grid"><div class="leftcol">
 <section class="panel"><h2>01 / MARKET CONFIGURATION</h2><div class="controls"><div class="field"><label for="asset">ASSET</label><select id="asset"><optgroup label="OTC CURRENCY"><option>EUR/USD OTC</option><option>GBP/USD OTC</option><option>AUD/USD OTC</option><option>USD/JPY OTC</option><option>USD/CHF OTC</option><option>USD/CAD OTC</option><option>EUR/JPY OTC</option><option>GBP/JPY OTC</option></optgroup><optgroup label="STANDARD FX"><option>EUR/USD</option><option>GBP/USD</option><option>USD/JPY</option><option>AUD/USD</option></optgroup><optgroup label="OTHER MARKETS"><option>BTC/USD</option><option>ETH/USD</option><option>Gold</option><option>S&amp;P 500</option></optgroup></select><div id="assetCatalogStatus" class="hint" aria-live="polite">Loading live Pocket Option asset catalog…</div></div><div class="field"><label for="tf">TIMEFRAME</label><select id="tf"><option value="5">5 seconds</option><option value="15">15 seconds</option><option value="30">30 seconds</option><option value="60">1 minute</option><option value="300" selected>5 minutes</option><option value="900">15 minutes</option><option value="3600">1 hour</option></select></div></div><button class="generate" id="generate">⚡ &nbsp; GENERATE SIGNAL</button><div class="hint">Select an asset and timeframe, then request one fresh analysis.</div><div id="notice" class="notice"></div><div class="status"><span>ENGINE STATUS</span><span class="pill" id="engine">WAITING FOR VERIFIED DATA</span></div><div class="steps"><div class="step"><span class="num">1</span><div><b>Market Context</b><small id="s1">Awaiting analysis request</small></div><span class="mark">◌</span></div><div class="step"><span class="num">2</span><div><b>Volatility Analysis</b><small id="s2">Measuring market movement and candle range</small></div><span class="mark">◌</span></div><div class="step"><span class="num">3</span><div><b>Pattern Matching</b><small id="s3">Price action and candle structure</small></div><span class="mark">◌</span></div><div class="step"><span class="num">4</span><div><b>Finalizing Signal</b><small id="s4">Validating direction, score and fakeout risk</small></div><span class="mark">◌</span></div></div></section>
+<section class="panel"><h2>LIVE POCKET OPTION CANDLE CHART</h2><div class="hint" id="chartStatus">Waiting for verified chart candles…</div><canvas id="marketCandles" height="210" style="display:block;width:100%;height:210px;margin-top:8px;background:#030b16;border:1px solid #153b5d;border-radius:10px"></canvas><div class="hint">Chart follows the selected broker asset and timeframe. Only verified Pocket Option candles are drawn; unavailable feeds are not replaced with demo candles.</div></section>
 <section class="panel"><h2>02 / RECENT SIGNAL HISTORY</h2><table class="history"><thead><tr><th>TIME</th><th>ASSET</th><th>RESULT</th><th>STATUS</th></tr></thead><tbody id="history"><tr><td colspan="4" class="empty">No signals generated yet.</td></tr></tbody></table><div class="disclaimer">History records generated signals only. Outcomes require verified market data and expiry-based result checking.</div></section>
 </div><div class="rightcol" style="display:grid;gap:14px;align-content:start">
 <section class="panel"><h2>03 / SIGNAL OUTPUT</h2><div class="resulthead">DIRECTIONAL ANALYSIS</div><div class="results"><div class="result up" id="up"><div class="arrow">↑</div><strong>UP</strong><small>POTENTIAL BUY</small></div><div class="result down" id="down"><div class="arrow">↓</div><strong>DOWN</strong><small>POTENTIAL SELL</small></div><div class="result wait" id="wait"><div class="arrow">Ⅱ</div><strong>WAIT</strong><small>INSUFFICIENT EVIDENCE</small></div></div><div class="stats"><div class="stat"><span>EXPIRY GUIDANCE</span><strong id="expiry">05:00</strong><span id="expiryLabel">Selected timeframe</span></div><div class="stat"><span>CONFIDENCE</span><strong id="confidence">—</strong><div class="meter"><i id="meter"></i></div><span>Not a guaranteed win rate</span></div><div class="stat"><span>ENTRY PRICE</span><strong id="price">—</strong><span>From verified market feed</span></div><div class="stat"><span>DATA QUALITY</span><strong id="quality">UNVERIFIED</strong><span id="qdetail">Live feed not connected</span></div></div><div class="disclaimer">No trade is placed. A directional arrow is not a guarantee of the next candle's outcome. Do not treat unverified/demo data as a live signal.</div></section>
@@ -89,7 +90,7 @@ loadBrokerAssets();$('generate').addEventListener('click',async()=>{const btn=$(
     const panel = document.createElement("section");
     panel.className = "panel";
     panel.id = "diWatch";
-    panel.innerHTML = '<h2>LIVE / ADX + DI WATCH</h2><div class="hint" id="diWatchStatus" aria-live="polite">Starting live line monitor…</div><div class="stats"><div class="stat"><span>DI+ · BUY PRESSURE</span><strong id="livePlus">—</strong><span id="livePlusSlope">Waiting for live data</span></div><div class="stat"><span>DI− · SELL PRESSURE</span><strong id="liveMinus">—</strong><span id="liveMinusSlope">Waiting for live data</span></div><div class="stat"><span>ADX(14) · TREND STRENGTH</span><strong id="liveAdx">—</strong><span id="liveAdxNote">Strength only, not direction</span></div><div class="stat"><span>DI LINE RELATIONSHIP</span><strong id="liveCross">WAIT</strong><span id="liveCrossNote">Watching line movement</span></div></div><div class="disclaimer">Refreshes automatically while this page is open. DI direction and line crosses are monitored separately from ADX strength. Signal-only mode; automatic trading remains OFF.</div>';
+    panel.innerHTML = '<h2>LIVE / ADX + DI WATCH</h2><div class="hint" id="diWatchStatus" aria-live="polite">Starting live line monitor…</div><div class="stats"><div class="stat"><span>DI+ · BUY PRESSURE</span><strong id="livePlus">—</strong><span id="livePlusSlope">Waiting for live data</span></div><div class="stat"><span>DI− · SELL PRESSURE</span><strong id="liveMinus">—</strong><span id="liveMinusSlope">Waiting for live data</span></div><div class="stat"><span>ADX(14) · TREND STRENGTH</span><strong id="liveAdx">—</strong><span id="liveAdxNote">Strength only, not direction</span></div><div class="stat"><span>DI LINE RELATIONSHIP</span><strong id="liveCross">WAIT</strong><span id="liveCrossNote">Watching line movement</span></div></div><div class="stat" style="margin-top:10px"><span>UPCOMING DI PROJECTION · NEXT 1–3 BARS</span><strong id="diForecastLabel">WAITING</strong><span id="diForecastDetail">Estimating DI+ and DI− direction</span><div id="diForecastSteps" class="hint">Projection will appear after verified data</div></div><div class="disclaimer">Refreshes automatically while this page is open. DI direction and line crosses are monitored separately from ADX strength. Signal-only mode; automatic trading remains OFF.</div>';
     right.prepend(panel);
   }
   function slopeText(delta, fallingTwo, risingTwo, positiveName, negativeName) {
@@ -135,6 +136,14 @@ loadBrokerAssets();$('generate').addEventListener('click',async()=>{const btn=$(
       $("diWatchStatus").textContent = "LIVE · " + asset + " · " + (tf < 60 ? tf + "s" : tf < 3600 ? (tf/60) + "m" : (tf/3600) + "h") + " · refreshed " + new Date().toLocaleTimeString();
       $("diWatchStatus").style.color = "#22ed86";
       $("liveAdxNote").textContent = Number(c.adx_14) >= 20 ? "Trend strength elevated" : Number(c.adx_14) >= 8 ? "Trend strength moderate/weak" : "Very weak trend";
+      const forecast = c.di_forecast || {};
+      $("diForecastLabel").textContent = forecast.available ? forecast.label : "INSUFFICIENT HISTORY";
+      $("diForecastDetail").textContent = forecast.available
+        ? forecast.projected_direction + " · current spread " + fmt(forecast.current_spread) + " → projected " + fmt(forecast.projected_spread_3_bars) + " in 3 bars"
+        : (forecast.note || "Waiting for enough DI observations");
+      $("diForecastSteps").textContent = forecast.available
+        ? forecast.projections.map(x => "+" + x.bars_ahead + ": DI+ " + fmt(x.plus) + " / DI− " + fmt(x.minus) + " (spread " + fmt(x.spread) + ")").join("  ·  ")
+        : "No projection yet";
       const key = asset + "|" + tf;
       if (key !== lastKey) { lastKey = key; lastSignalKey = ""; }
     } catch (e) {
@@ -159,4 +168,42 @@ loadBrokerAssets();$('generate').addEventListener('click',async()=>{const btn=$(
 })();
 </script>
 
+<script id="mega-man-live-candle-chart">
+(() => {
+  const $=id=>document.getElementById(id); let busy=false, timer=null;
+  function draw(bars) {
+    const canvas=$("marketCandles"); if(!canvas||!Array.isArray(bars)||!bars.length)return;
+    const ratio=window.devicePixelRatio||1, width=Math.max(300,canvas.clientWidth||600), height=210;
+    canvas.width=width*ratio; canvas.height=height*ratio;
+    const ctx=canvas.getContext("2d"); ctx.scale(ratio,ratio); ctx.clearRect(0,0,width,height);
+    const highs=bars.map(b=>Number(b.high)), lows=bars.map(b=>Number(b.low));
+    const max=Math.max(...highs), min=Math.min(...lows), span=max-min||1;
+    const pad=12, plotH=height-24, step=(width-2*pad)/bars.length, bodyW=Math.max(2,step*.58);
+    ctx.strokeStyle="#17324c";ctx.lineWidth=1;
+    for(let i=1;i<4;i++){const y=pad+plotH*i/4;ctx.beginPath();ctx.moveTo(pad,y);ctx.lineTo(width-pad,y);ctx.stroke();}
+    bars.forEach((b,i)=>{
+      const x=pad+i*step+step/2, o=Number(b.open), c=Number(b.close), h=Number(b.high), l=Number(b.low);
+      const y=v=>pad+(max-v)/span*plotH, up=c>=o;
+      ctx.strokeStyle=up?"#22ed86":"#ff4057";ctx.fillStyle=ctx.strokeStyle;
+      ctx.beginPath();ctx.moveTo(x,y(h));ctx.lineTo(x,y(l));ctx.stroke();
+      const top=Math.min(y(o),y(c)), bh=Math.max(1,Math.abs(y(o)-y(c)));
+      ctx.fillRect(x-bodyW/2,top,bodyW,bh);
+    });
+  }
+  async function poll(){
+    if(busy||document.visibilityState==="hidden")return;
+    const asset=$("asset")?.value,tf=Number($("tf")?.value||5);if(!asset)return;busy=true;
+    try{
+      const base=window.MEGA_MAN_API_BASE||"https://mega-man-signal-api.onrender.com";
+      const r=await fetch(base.replace(/\/$/,"")+"/api/market?asset="+encodeURIComponent(asset)+"&tf="+tf,{cache:"no-store"});
+      const d=await r.json();if(!r.ok||!d.verified||!Array.isArray(d.bars)||!d.bars.length)throw new Error(d.feed_status||"No verified candles");
+      draw(d.bars);$("chartStatus").textContent="VERIFIED LIVE · "+asset+" · "+d.bars.length+" candles · updated "+new Date().toLocaleTimeString();$("chartStatus").style.color="#22ed86";
+    }catch(e){$("chartStatus").textContent="CHART WAITING · "+String(e.message||e).slice(0,120);$("chartStatus").style.color="#ffca62";}
+    finally{busy=false;}
+  }
+  function schedule(){if(timer)clearInterval(timer);poll();timer=setInterval(poll,4000);}
+  function start(){schedule();$("asset")?.addEventListener("change",poll);$("tf")?.addEventListener("change",schedule);window.addEventListener("resize",poll);document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")poll();});}
+  if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",start,{once:true});else start();
+})();
+</script>
 </body></html>
