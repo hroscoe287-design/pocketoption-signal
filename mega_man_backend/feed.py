@@ -40,7 +40,7 @@ class PocketOptionFeed:
             uid=payload.get("uid")
             if not isinstance(session,str) or not session or uid is None:return None
             # Keep the parser-required order stable regardless of the JSON the user pasted.
-            normalized={"session":session,"isDemo":payload.get("isDemo",1),"uid":uid}
+            normalized={"session":session,"isDemo":0,"uid":uid}
             for key,value in payload.items():
                 if key not in normalized:normalized[key]=value
             normalized.setdefault("platform",2)
@@ -88,7 +88,7 @@ class PocketOptionFeed:
                 session=payload.get("session")
                 uid=payload.get("uid")
                 if isinstance(session,str) and session and uid is not None:
-                    normalized={"session":session,"isDemo":payload.get("isDemo",1),"uid":uid}
+                    normalized={"session":session,"isDemo":0,"uid":uid}
                     for key,value in payload.items():
                         if key not in normalized:normalized[key]=value
                     normalized.setdefault("platform",2)
