@@ -85,30 +85,47 @@ def diagnostics(asset: str = DEFAULT_ASSET, tf: int = DEFAULT_TF):
 
 @app.get("/api/network-diagnostics")
 def network_diagnostics():
-    """Credential-free DNS check for the LIVE WebSocket hosts used by the installed client."""
+    """Credential-free DNS, TCP and TLS checks for LIVE WebSocket hosts."""
+    import ssl
     try:
         from pocketoptionapi.constants import REGION
         urls = list(REGION().get_real_servers(randomize=False))
     except Exception as exc:
         return {"ok": False, "error": type(exc).__name__, "automatic_execution": False}
     results = []
+    context = ssl.create_default_context()
     for url in urls:
         host = urlparse(url).hostname
-        item = {"host": host, "port": 443, "dns_ok": False, "address_count": 0}
+        item = {"host": host, "port": 443, "dns_ok": False,
+                "tcp_ok": False, "tls_ok": False, "address_count": 0}
         try:
             addresses = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
             unique = sorted({entry[4][0] for entry in addresses})
             item.update({"dns_ok": bool(unique), "address_count": len(unique)})
+            if unique:
+                try:
+                    with socket.create_connection((host, 443), timeout=3.0) as raw:
+                        item["tcp_ok"] = True
+                        with context.wrap_socket(raw, server_hostname=host) as secure:
+                            item["tls_ok"] = bool(secure.version())
+                            item["tls_version"] = secure.version()
+                except socket.timeout:
+                    item["connection_error"] = "TIMEOUT"
+                except ssl.SSLError as exc:
+                    item["connection_error"] = "TLS_" + type(exc).__name__
+                except OSError as exc:
+                    item["connection_error"] = "TCP_" + type(exc).__name__
         except socket.gaierror as exc:
             item["error"] = "DNS_" + str(exc.errno)
         except Exception as exc:
             item["error"] = type(exc).__name__
         results.append(item)
     return {
-        "ok": any(item["dns_ok"] for item in results),
-        "mode": "LIVE endpoint DNS only",
+        "ok": any(item["tls_ok"] for item in results),
+        "mode": "LIVE endpoint DNS+TCP+TLS diagnostics",
         "servers": results,
         "credentials_used": False,
+        "websocket_authenticated": False,
         "automatic_execution": False
     }
 
