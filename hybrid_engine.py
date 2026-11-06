@@ -45,6 +45,20 @@ def _adx(candles, di_length=7, adx_smoothing=14):
     }
 
 
+def _fractal_signal(arrow):
+    """Map the user's Pocket Option fractal-arrow convention to trade direction."""
+    return {"DOWN": "BUY", "UP": "SELL"}.get(str(arrow).upper(), "WAIT")
+
+
+def _di_cross_signal(spread_now, spread_prev):
+    """Return a direction only on a newly confirmed +DI/-DI crossover."""
+    if spread_now > 0 and spread_prev <= 0:
+        return "BUY"
+    if spread_now < 0 and spread_prev >= 0:
+        return "SELL"
+    return "WAIT"
+
+
 def _latest_fractal(candles, lookback=10):
     # A 5-bar Fractal-3 needs two candles to the right to confirm.
     if len(candles) < 5:
@@ -177,28 +191,32 @@ class CombinedEngine:
             x_status, x_quality, fakeout_risk = "NO CLEAR X", 0, "ELEVATED"
 
         # FRACTAL-3 is the primary setup, with DI used to confirm direction.
-        # A confirmed low fractal (UP arrow) is bullish; a confirmed high
-        # fractal (DOWN arrow) is bearish. Do not invert the arrow semantics.
+        # User-defined convention: a DOWN-pointing fractal is bullish (BUY);
+        # an UP-pointing fractal is bearish (SELL). Early projections are
+        # heads-up only; an actual DI crossover is required for an entry.
         sonic = "WAIT"
+        fractal_direction = _fractal_signal(fractal["arrow"]) if fractal else "WAIT"
+        di_cross_direction = _di_cross_signal(spread_now, spread_prev)
+        di_cross_confirmed = di_cross_direction != "WAIT"
         fractal_aligned = bool(
-            fractal and (
-                (fractal["arrow"] == "UP" and plus > minus) or
-                (fractal["arrow"] == "DOWN" and minus > plus)
-            )
+            fractal_direction != "WAIT" and di_cross_direction == fractal_direction
         )
         close_now = float(candles[-1]["close"])
         close_prev = float(candles[-2]["close"])
         price_confirms = bool(
-            fractal and (
-                (fractal["arrow"] == "UP" and close_now >= close_prev) or
-                (fractal["arrow"] == "DOWN" and close_now <= close_prev)
-            )
+            (fractal_direction == "BUY" and close_now >= close_prev) or
+            (fractal_direction == "SELL" and close_now <= close_prev)
         )
-        di_min_gap = max(2.0, max(plus, minus) * 0.10)
+        # Permit smaller DI X formations on the user's very short charts;
+        # longer timeframes retain a stricter separation requirement.
+        if int(timeframe_seconds) <= 15:
+            di_min_gap = max(0.75, max(plus, minus) * 0.04)
+        else:
+            di_min_gap = max(2.0, max(plus, minus) * 0.10)
         di_has_direction = gap >= di_min_gap
         trend_not_dead = bool((adx is not None and adx >= 12) or adx_rising)
         if fractal_aligned and di_has_direction and trend_not_dead:
-            sonic = "BUY" if fractal["arrow"] == "UP" else "SELL"
+            sonic = fractal_direction
 
         total_di = max(1e-9, plus + minus)
         plus_boxes = max(1, min(4, int(round(5 * plus / total_di))))
@@ -211,6 +229,10 @@ class CombinedEngine:
             "x_gap_expanding": bool(widening), "dominant_di_rising": bool(dominant_rising),
             "adx_rising": bool(adx_rising),
             "fractal_arrow": fractal["arrow"] if fractal else None,
+            "fractal_signal_direction": fractal_direction,
+            "di_cross_direction": di_cross_direction,
+            "di_cross_confirmed": bool(di_cross_confirmed),
+            "di_cross_status": ("CONFIRMED " + di_cross_direction if di_cross_confirmed else "WAITING FOR ACTUAL CROSS"),
             "fractal_time": fractal["time"] if fractal else None,
             "fractal_price": round(float(fractal["price"]), 8) if fractal else None,
             "fractal_age_candles": (len(candles) - 1 - next((i for i, c in enumerate(candles) if str(c.get("time")) == str(fractal["time"])), len(candles)-1)) if fractal else None,
@@ -239,9 +261,14 @@ class CombinedEngine:
         base["fractal_di_gap_sufficient"] = di_has_direction
         base["trend_not_dead"] = trend_not_dead
         if sonic == "WAIT":
+            wait_reason = (
+                f"Fractal {fractal['arrow']} maps to {fractal_direction}; "
+                f"DI cross status: {base.get('di_cross_status', 'WAITING')}. "
+                if fractal else "Waiting for a confirmed Fractal-3 pivot. "
+            )
             base.update(signal="WAIT", confirmation_level="WAIT",
-                        agreement="FRACTAL / DI NOT ALIGNED",
-                        reason=f"Waiting for a confirmed Fractal-3 pivot, matching DI dominance, and usable trend strength. {x_status}.")
+                        agreement="FRACTAL / DI CROSS NOT ALIGNED",
+                        reason=f"{wait_reason}Early projection is not an entry signal. {x_status}.")
             return base
 
         base["signal"] = sonic
@@ -276,6 +303,12 @@ class CombinedEngine:
         if widening or forming_x:
             desire_setup_strength += 10
         if early_score >= 65:
+            desire_setup_strength += 5
+        if di_cross_confirmed and fractal_aligned:
+            desire_setup_strength += 10
+        if spread_velocity * (1 if sonic == "BUY" else -1) > 0:
+            desire_setup_strength += 5
+        if spread_acceleration * (1 if sonic == "BUY" else -1) > 0:
             desire_setup_strength += 5
         if adx is not None and adx >= 15:
             desire_setup_strength += 5
