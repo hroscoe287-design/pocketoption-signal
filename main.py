@@ -684,14 +684,14 @@ def snapshot(tf=None, asset=None):
     # Transparent setup-strength index, not a calibrated win probability.
     # Fractal-3 setup grade is now the main contributor; DI separation and the
     # optional X/GODMODE checks are secondary context.
-    di_gap = float(hybrid.get("di_gap", 0) or 0)
-    di_strength = min(10, int(di_gap / 4))
-    fractal_grade = int(hybrid.get("fractal_setup_strength", 0) or 0)
+    fractal_grade = int(hybrid.get("weighted_score", hybrid.get("fractal_setup_strength", 0)) or 0)
     sonic_ready = signal != "WAIT"
-    strength = min(99, 76 + int(round(fractal_grade * 0.20)) + di_strength +
-                   (4 if hybrid.get("x_quality", 0) >= 3 else 0)) if is_live and sonic_ready else 0
-    strength = max(1, min(99, strength + int(hybrid.get("confirmation_adjustment", 0)) +
-                          int(hybrid.get("x_quality_adjustment", 0)))) if sonic_ready and is_live else 0
+    # Show the live weighted setup score even while the entry filter says WAIT.
+    # Only confirmed BUY/SELL signals receive the small confirmation adjustments.
+    strength = min(99, max(0, fractal_grade)) if is_live else 0
+    if sonic_ready and is_live:
+        strength = max(1, min(99, strength + int(hybrid.get("confirmation_adjustment", 0)) +
+                              int(hybrid.get("x_quality_adjustment", 0))))
     # Keep a quality floor, but stop requiring a rare 90+ score for every alert.
     if is_live and signal != "WAIT" and strength < 80:
         signal = "WAIT"
