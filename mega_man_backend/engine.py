@@ -129,37 +129,53 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     elif di_cross_direction == -1 and di_spread >= 0:
         di_cross_direction=0
     di_cross_confirmed=bool(di_cross_direction)
-    fractal_di_aligned=bool(fractal_direction and fractal_direction==di_cross_direction)
+    # Current DI line position carries the direction after the crossover.
+    # The crossover is a timing bonus, not a requirement that expires after 3 bars.
+    di_direction=1 if di_spread>0 else -1 if di_spread<0 else 0
+    fractal_di_aligned=bool(fractal_direction and fractal_direction==di_direction)
     # Wider X gets more weight. Very short 5s/15s charts may use a smaller
-    # separation, but still require a real crossover and confirmed fractal.
+    # separation; larger timeframes demand a wider DI gap.
     min_di_gap=max(0.75,max(dip,dim)*0.04) if timeframe_seconds<=15 else max(2.0,max(dip,dim)*0.10)
     di_gap_valid=abs(di_spread)>=min_di_gap
-    di_momentum_aligned=bool(di_velocity*di_cross_direction>0) if di_cross_direction else False
-    bullish_di_rollover_block=bool(timeframe_seconds<=15 and di_cross_direction==1 and (
+    di_momentum_aligned=bool(di_direction and di_velocity*di_direction>0)
+    acceleration_aligned=bool(di_direction and di_accel*di_direction>0)
+    bullish_di_rollover_block=bool(timeframe_seconds<=15 and di_direction==1 and (
         di_plus_turning_down or (di_minus_rising_two_bars and macd_fading)
     ))
-    # Fractal + actual DI cross are the primary setup. EMA/MACD remain secondary context.
+    # Weighted directional confluence (0–100). It remains live after the
+    # crossover while the DI spread still points the same way. A recent cross
+    # adds confirmation but is not required for a valid score.
     score=0
-    if fractal_direction: score+=40
-    if di_cross_confirmed: score+=35
-    if di_gap_valid: score+=10
-    if adx>=15: score+=10
+    if fractal_direction==di_direction and di_direction:
+        score+=30
+    elif fractal_direction:
+        score+=8
+    if di_direction and di_gap_valid:
+        gap_ratio=abs(di_spread)/max(min_di_gap,1e-9)
+        score+=25 if gap_ratio>=2.0 else 20 if gap_ratio>=1.5 else 15
+    elif di_direction:
+        score+=5
+    if di_momentum_aligned: score+=8
+    if acceleration_aligned: score+=4
+    if di_cross_confirmed and di_cross_direction==di_direction: score+=3
+    if adx>=25: score+=15
+    elif adx>=20: score+=12
+    elif adx>=15: score+=9
     elif adx>=8: score+=5
-    if di_momentum_aligned: score+=5
-    if fractal_di_aligned:
-        direction=fractal_direction
-    else:
-        direction=0
+    # Secondary trend context contributes at most 15 points.
+    context_weights={"ema_9_21":4,"macd":4,"rsi":3,"wavetrend":2,"alligator":2}
+    score+=sum(w for k,w in context_weights.items() if votes[k]==di_direction and di_direction)
+    direction=fractal_direction if fractal_di_aligned else 0
     fakeout=bool(direction and (not di_gap_valid or (di_velocity*direction<0 and abs(di_spread)<1.8)))
     eligible=bool(direction and fractal_di_aligned and di_gap_valid and score>=min_score and adx>=8 and not fakeout and not bullish_di_rollover_block)
     if bullish_di_rollover_block:
-        direction=0; score=0
+        direction=0
     reason=("DI+ rollover / MACD fade — BUY blocked" if bullish_di_rollover_block else
-            "Fractal and actual DI crossover aligned" if eligible else
-            "Fractal and DI crossover disagree — WAIT" if not fractal_di_aligned else
+            "Confirmed fractal agrees with continuing DI direction" if eligible else
+            "Fractal and current DI direction disagree — WAIT" if not fractal_di_aligned else
             "DI gap too narrow / fakeout risk — WAIT" if fakeout or not di_gap_valid else
             "Trend strength too weak (ADX < 8)" if adx<8 else
-            f"Confluence below {min_score}/100" if score<min_score else "No confirmed entry setup")
+            f"Weighted confluence below {min_score}/100" if score<min_score else "No confirmed entry setup")
     score=min(100,max(0,score))
     early_cross=(prev_spread<=0<di_spread) if direction==1 else ((prev_spread>=0>di_spread) if direction==-1 else False)
     market_context=f"Verified candles: {len(candles)}; EMA trend {'bullish' if e9[-1]>e21[-1] else 'bearish' if e9[-1]<e21[-1] else 'flat'}"
