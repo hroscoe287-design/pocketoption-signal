@@ -105,22 +105,46 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     # ADX confirms trend quality; it never chooses direction by itself.
     if adx<15:score=max(0,score-10)
     elif adx>=20:score=min(100,score+5)
-    fractal_direction=1 if fl and close[-1]>high[-4] else -1 if fh and close[-1]<low[-4] else 0
-    if fractal_direction==direction and direction:score=min(100,score+5)
-    score=min(100,max(0,score))
-    bullish_di_rollover_block=bool(timeframe_seconds<=5 and direction==1 and (
+    # Confirmed Fractal-3 pivots: a low-pivot/down arrow is bullish (BUY)
+    # and a high-pivot/up arrow is bearish (SELL), per the user's chart convention.
+    # The pivot at -4 has three completed candles on its right.
+    fractal_direction=1 if fl else -1 if fh else 0
+    # Entry requires a NEW, actual DI crossover. Forecasts are informational only.
+    di_cross_direction=1 if prev_spread<=0<di_spread else -1 if prev_spread>=0>di_spread else 0
+    di_cross_confirmed=bool(di_cross_direction)
+    fractal_di_aligned=bool(fractal_direction and fractal_direction==di_cross_direction)
+    # Wider X gets more weight. Very short 5s/15s charts may use a smaller
+    # separation, but still require a real crossover and confirmed fractal.
+    min_di_gap=max(0.75,max(dip,dim)*0.04) if timeframe_seconds<=15 else max(2.0,max(dip,dim)*0.10)
+    di_gap_valid=abs(di_spread)>=min_di_gap
+    di_momentum_aligned=bool(di_velocity*di_cross_direction>0) if di_cross_direction else False
+    bullish_di_rollover_block=bool(timeframe_seconds<=15 and di_cross_direction==1 and (
         di_plus_turning_down or (di_minus_rising_two_bars and macd_fading)
     ))
-    # On 5s, block UP when DI+ rolls over; also block if DI- is climbing
-    # for two bars while MACD momentum fades. Wait for fresh confirmation.
-    if bullish_di_rollover_block:
+    # Fractal + actual DI cross are the primary setup. EMA/MACD remain secondary context.
+    score=0
+    if fractal_direction: score+=40
+    if di_cross_confirmed: score+=35
+    if di_gap_valid: score+=10
+    if adx>=15: score+=10
+    elif adx>=8: score+=5
+    if di_momentum_aligned: score+=5
+    if fractal_di_aligned:
+        direction=fractal_direction
+    else:
         direction=0
-        score=0
+    fakeout=bool(direction and (not di_gap_valid or (di_velocity*direction<0 and abs(di_spread)<1.8)))
+    eligible=bool(direction and fractal_di_aligned and di_gap_valid and score>=min_score and adx>=8 and not fakeout and not bullish_di_rollover_block)
+    if bullish_di_rollover_block:
+        direction=0; score=0
+    reason=("DI+ rollover / MACD fade — BUY blocked" if bullish_di_rollover_block else
+            "Fractal and actual DI crossover aligned" if eligible else
+            "Fractal and DI crossover disagree — WAIT" if not fractal_di_aligned else
+            "DI gap too narrow / fakeout risk — WAIT" if fakeout or not di_gap_valid else
+            "Trend strength too weak (ADX < 8)" if adx<8 else
+            f"Confluence below {min_score}/100" if score<min_score else "No confirmed entry setup")
+    score=min(100,max(0,score))
     early_cross=(prev_spread<=0<di_spread) if direction==1 else ((prev_spread>=0>di_spread) if direction==-1 else False)
-    # Avoid late entries and DI whipsaws: require spread direction to reinforce the signal.
-    fakeout=bool(direction and (abs(di_spread)<0.6 or (di_velocity*direction<0 and abs(di_spread)<1.8 and not early_cross)))
-    eligible=bool(direction and score>=min_score and adx>=8 and not fakeout)
-    reason=("5s DI+ turning downward — bullish signal blocked" if bullish_di_rollover_block else "Four-stage confluence threshold met" if eligible else "DI fakeout risk — WAIT" if fakeout else "Trend strength too weak (ADX < 8)" if adx<8 else f"Confluence below {min_score}/100" if score<min_score else "No directional agreement")
     market_context=f"Verified candles: {len(candles)}; EMA trend {'bullish' if e9[-1]>e21[-1] else 'bearish' if e9[-1]<e21[-1] else 'flat'}"
     volatility_context=f"ATR14 {atr14:.6g} ({volatility_pct:.4f}% of price); latest candle body/range {body_ratio:.2f}"
     pattern_context=f"DI spread {di_spread:.2f}, velocity {di_velocity:.2f}; MACD {'positive' if hist>0 else 'negative' if hist<0 else 'flat'}; fractal confirmation {'yes' if fractal_direction==direction and direction else 'no'}"
@@ -145,4 +169,4 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
       "macd_fading":macd_fading,"di_forecast":di_projection,
       "bullish_di_rollover_block":bullish_di_rollover_block,"timeframe_seconds":timeframe_seconds,
       "early_cross":early_cross,"fractal_high_confirmed":fh,
-      "fractal_low_confirmed":fl,"fakeout_risk":fakeout,"votes":votes}}
+      "fractal_low_confirmed":fl,"fractal_direction":"BUY" if fractal_direction==1 else "SELL" if fractal_direction==-1 else "WAIT", "di_cross_direction":"BUY" if di_cross_direction==1 else "SELL" if di_cross_direction==-1 else "WAIT", "di_cross_confirmed":di_cross_confirmed, "fractal_di_aligned":fractal_di_aligned, "di_gap_valid":di_gap_valid, "minimum_di_gap":round(min_di_gap,3), "fakeout_risk":fakeout,"votes":votes}}
