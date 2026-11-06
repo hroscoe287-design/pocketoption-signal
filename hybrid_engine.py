@@ -190,85 +190,89 @@ class CombinedEngine:
         else:
             x_status, x_quality, fakeout_risk = "NO CLEAR X", 0, "ELEVATED"
 
-        # FRACTAL-3 is the primary setup, with DI used to confirm direction.
-        # User-defined convention: a DOWN-pointing fractal is bullish (BUY);
-        # an UP-pointing fractal is bearish (SELL). Early projections are
-        # heads-up only; an actual DI crossover is required for an entry.
-        sonic = "WAIT"
-        fractal_direction = _fractal_signal(fractal["arrow"]) if fractal else "WAIT"
-        di_cross_direction = _di_cross_signal(spread_now, spread_prev)
-        di_cross_confirmed = di_cross_direction != "WAIT"
-        fractal_aligned = bool(
-            fractal_direction != "WAIT" and di_cross_direction == fractal_direction
-        )
-        close_now = float(candles[-1]["close"])
-        close_prev = float(candles[-2]["close"])
-        price_confirms = bool(
-            (fractal_direction == "BUY" and close_now >= close_prev) or
-            (fractal_direction == "SELL" and close_now <= close_prev)
-        )
-        # Permit smaller DI X formations on the user's very short charts;
-        # longer timeframes retain a stricter separation requirement.
-        if int(timeframe_seconds) <= 15:
-            di_min_gap = max(0.75, max(plus, minus) * 0.04)
-        else:
-            di_min_gap = max(2.0, max(plus, minus) * 0.10)
-        di_has_direction = gap >= di_min_gap
-        trend_not_dead = bool((adx is not None and adx >= 12) or adx_rising)
-        if fractal_aligned and di_has_direction and trend_not_dead:
-            sonic = fractal_direction
+        # FRACTAL-3 + DI weighted score. Score every live evaluation, including
+        # after the crossover candle; only the actual entry signal has stricter gates.
+        # This is a setup-strength index, never a calibrated win probability.
+        grade_direction = score_direction
+        direction_sign = 1 if grade_direction == "BUY" else (-1 if grade_direction == "SELL" else 0)
+        desire_setup_strength = 0
+        if grade_direction != "WAIT":
+            desire_setup_strength += 20
+        if di_has_direction:
+            desire_setup_strength += 15
+        if widening:
+            desire_setup_strength += 10
+        if fractal_aligned:
+            desire_setup_strength += 20
+        if price_confirms:
+            desire_setup_strength += 10
+        if direction_sign and spread_velocity * direction_sign > 0:
+            desire_setup_strength += 10
+        if direction_sign and spread_acceleration * direction_sign > 0:
+            desire_setup_strength += 5
+        if adx is not None and adx >= 15:
+            desire_setup_strength += 5
+        if adx_rising:
+            desire_setup_strength += 5
+        if godmode == grade_direction and grade_direction != "WAIT":
+            desire_setup_strength += 5
+        if strong_x:
+            desire_setup_strength += 5
+        if fakeout_risk == "HIGH":
+            desire_setup_strength -= 10
+        elif fakeout_risk == "ELEVATED":
+            desire_setup_strength -= 5
+        desire_setup_strength = max(0, min(100, desire_setup_strength))
 
-        total_di = max(1e-9, plus + minus)
-        plus_boxes = max(1, min(4, int(round(5 * plus / total_di))))
-        minus_boxes = 5 - plus_boxes
-        base.update({
-            "sonic_signal": sonic, "wide_x": bool(wide),
-            "plus_di_boxes": plus_boxes, "minus_di_boxes": minus_boxes,
-            "di_box_ratio": f"{plus_boxes}:{minus_boxes}",
-            "x_status": x_status, "x_quality": x_quality, "fakeout_risk": fakeout_risk,
-            "x_gap_expanding": bool(widening), "dominant_di_rising": bool(dominant_rising),
-            "adx_rising": bool(adx_rising),
-            "fractal_arrow": fractal["arrow"] if fractal else None,
-            "fractal_signal_direction": fractal_direction,
-            "di_cross_direction": di_cross_direction,
-            "di_cross_confirmed": bool(di_cross_confirmed),
-            "di_cross_status": ("CONFIRMED " + di_cross_direction if di_cross_confirmed else "WAITING FOR ACTUAL CROSS"),
-            "fractal_time": fractal["time"] if fractal else None,
-            "fractal_price": round(float(fractal["price"]), 8) if fractal else None,
-            "fractal_age_candles": (len(candles) - 1 - next((i for i, c in enumerate(candles) if str(c.get("time")) == str(fractal["time"])), len(candles)-1)) if fractal else None,
-            "plus_di": round(plus, 2), "minus_di": round(minus, 2),
-            "adx": round(adx, 2) if adx is not None else None,
-            "di_gap": round(gap, 2), "di_gap_previous": round(prior_gap, 2),
-            "early_x_warning": bool(early_warning),
-            "early_x_status": early_status,
-            "desire_agent": "DESIRE",
-            "desire_level": desire_level,
-            "desire_superior": desire_superior,
-            "desire_direction": desire_direction,
-            "desire_score": int(early_score),
-            "desire_message": desire_message,
-            "early_x_direction": early_direction if early_warning else "WAIT",
-            "early_x_score": int(early_score),
-            "projected_cross_bars": round(projected_cross_bars, 2) if projected_cross_bars is not None else None,
-            "spread_velocity": round(spread_velocity, 3),
-            "spread_acceleration": round(spread_acceleration, 3),
-            "signal": godmode, "godmode_signal": godmode,
-        })
-        # Fractal direction and DI agreement lead. GODMODE is a score adjustment,
-        # not a mandatory veto; this avoids suppressing valid fractal setups.
+        # A clear DI direction remains scoreable after its cross. Fractal-3
+        # alignment is still required before an actionable BUY/SELL is emitted.
+        sonic = "WAIT"
+        if (fractal_aligned and di_has_direction and trend_not_dead
+                and desire_setup_strength >= 65):
+            sonic = grade_direction
+
         base["fractal_aligned"] = fractal_aligned
         base["fractal_price_confirmation"] = price_confirms
         base["fractal_di_gap_sufficient"] = di_has_direction
         base["trend_not_dead"] = trend_not_dead
+        base["weighted_score"] = int(desire_setup_strength)
+        base["weighted_direction"] = grade_direction
+        base["fractal_setup_strength"] = int(desire_setup_strength)
+        base["desire_setup_strength"] = int(desire_setup_strength)
+        base["desire_signal_threshold"] = 65
+        base["desire_signal_status"] = (
+            "FRACTAL SETUP CONFIRMED" if sonic != "WAIT"
+            else ("DIRECTIONAL SCORE — WAIT FOR FRACTAL ALIGNMENT"
+                  if grade_direction != "WAIT"
+                  else "WAIT — NO CLEAR DI DIRECTION")
+        )
+        base["score_breakdown"] = {
+            "di_direction": 20 if grade_direction != "WAIT" else 0,
+            "di_separation": 15 if di_has_direction else 0,
+            "di_expansion": 10 if widening else 0,
+            "fractal_alignment": 20 if fractal_aligned else 0,
+            "price_follow_through": 10 if price_confirms else 0,
+            "di_velocity": 10 if direction_sign and spread_velocity * direction_sign > 0 else 0,
+            "di_acceleration": 5 if direction_sign and spread_acceleration * direction_sign > 0 else 0,
+            "adx_strength": 5 if adx is not None and adx >= 15 else 0,
+            "adx_rising": 5 if adx_rising else 0,
+            "godmode_agreement": 5 if godmode == grade_direction and grade_direction != "WAIT" else 0,
+            "strong_x_bonus": 5 if strong_x else 0,
+            "fakeout_penalty": -10 if fakeout_risk == "HIGH" else (-5 if fakeout_risk == "ELEVATED" else 0),
+        }
+        base.update({"sonic_signal": sonic})
+
         if sonic == "WAIT":
             wait_reason = (
-                f"Fractal {fractal['arrow']} maps to {fractal_direction}; "
-                f"DI cross status: {base.get('di_cross_status', 'WAITING')}. "
-                if fractal else "Waiting for a confirmed Fractal-3 pivot. "
+                f"DI direction {grade_direction}; weighted setup score "
+                f"{desire_setup_strength}/100. "
+                + (f"Fractal {fractal['arrow']} maps to {fractal_direction}; "
+                   f"current DI direction is {di_direction}. "
+                   if fractal else "Waiting for a confirmed Fractal-3 pivot. ")
             )
-            base.update(signal="WAIT", confirmation_level="WAIT",
-                        agreement="FRACTAL / DI CROSS NOT ALIGNED",
-                        reason=f"{wait_reason}Early projection is not an entry signal. {x_status}.")
+            base.update(signal="WAIT", confirmation_level="WEIGHTED SCORE / ENTRY FILTER",
+                        agreement="DIRECTIONAL BIAS ONLY",
+                        reason=f"{wait_reason}{x_status}. No entry alert until Fractal-3, DI separation and trend filters align.")
             return base
 
         base["signal"] = sonic
@@ -290,60 +294,6 @@ class CombinedEngine:
             base["confirmation_adjustment"] = -5
             base["x_quality_adjustment"] = -3
             base["reason"] = f"SONIC direction {sonic} remains primary; GODMODE disagrees ({godmode}), so confidence is reduced without overriding direction. DI boxes {plus_boxes}:{minus_boxes}; {x_status}."
-
-        # Fractal-led setup grade (not a win probability). Fractal pivot + DI
-        # alignment carry the most weight. Candle follow-through, DI expansion,
-        # ADX and optional GODMODE agreement refine quality without hard-blocking
-        # an otherwise valid Fractal-3 setup.
-        desire_setup_strength = 35
-        if fractal_aligned:
-            desire_setup_strength += 20
-        if price_confirms:
-            desire_setup_strength += 15
-        if widening or forming_x:
-            desire_setup_strength += 10
-        if early_score >= 65:
-            desire_setup_strength += 5
-        if di_cross_confirmed and fractal_aligned:
-            desire_setup_strength += 10
-        if spread_velocity * (1 if sonic == "BUY" else -1) > 0:
-            desire_setup_strength += 5
-        if spread_acceleration * (1 if sonic == "BUY" else -1) > 0:
-            desire_setup_strength += 5
-        if adx is not None and adx >= 15:
-            desire_setup_strength += 5
-        if adx_rising:
-            desire_setup_strength += 5
-        if godmode == sonic:
-            desire_setup_strength += 5
-        if strong_x:
-            desire_setup_strength += 5
-        if fakeout_risk == "HIGH":
-            desire_setup_strength -= 10
-        elif fakeout_risk == "ELEVATED":
-            desire_setup_strength -= 5
-        desire_setup_strength = max(0, min(100, desire_setup_strength))
-        base["fractal_setup_strength"] = desire_setup_strength
-        base["desire_setup_strength"] = desire_setup_strength
-        base["desire_signal_threshold"] = 65
-        base["desire_signal_status"] = (
-            "FRACTAL SETUP CONFIRMED"
-            if desire_setup_strength >= 65
-            else "WAIT — FRACTAL CONFIRMATION TOO WEAK"
-        )
-        # The signal requires the confirmed fractal/DI structure, a usable
-        # trend, and a modest setup-grade floor. GODMODE and a perfect X are
-        # helpful but are not mandatory. Signal-only; no order-placement calls.
-        if not (fractal_aligned and di_has_direction and trend_not_dead and desire_setup_strength >= 65):
-            base["signal"] = "WAIT"
-            base["alert_eligible"] = False
-            base["confirmation_level"] = "FRACTAL QUALITY FILTER"
-            base["reason"] = (
-                f"Waiting for stronger fractal confluence: {desire_setup_strength}/100 setup grade; "
-                f"Fractal/DI alignment, sufficient DI separation, and trend confirmation are required. "
-                f"Radar remains active: {early_status}."
-            )
-            return base
 
         # Lockout applies to duplicate alerts only, never to the live signal or chart.
         candle_id = str(candles[-1].get("time"))
