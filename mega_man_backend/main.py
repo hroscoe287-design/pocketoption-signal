@@ -219,12 +219,15 @@ def analyze_request(req: AnalyzeRequest):
     if direction == "WAIT":
         score = 0
     latest = candles[-1]
+    candle_time = latest.get("time", latest.get("timestamp"))
+    signal_id = f"{broker_asset(req.asset)}:{req.timeframe_seconds}:{candle_time}:{direction}" if candle_time is not None and direction in {"UP", "DOWN"} else None
     return {
         "asset": broker_asset(req.asset), "timeframe_seconds": req.timeframe_seconds,
         "signal": direction, "direction": direction,
         "arrow": "green_up" if direction == "UP" else ("red_down" if direction == "DOWN" else None),
         "confidence": score, "confidence_type": "indicator_strength_not_win_probability",
         "price": latest.get("close"), "expiry_seconds": req.timeframe_seconds,
+        "signal_id": signal_id, "signal_candle_time": candle_time,
         "verified": True, "data_quality": "Verified Pocket Option live candles",
         "feed_status": data.get("status"), "candle_age_seconds": data.get("debug", {}).get("last_candle_age_seconds"),
         "analysis": {"reason": result.get("reason", ""), "components": result.get("components", {}),
