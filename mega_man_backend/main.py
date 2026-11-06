@@ -215,9 +215,10 @@ def analyze_request(req: AnalyzeRequest):
         "DOWN" if raw_direction.startswith("SELL") or "PUT" in raw_direction else "WAIT")
     if not result.get("eligible"):
         direction = "WAIT"
+    # Keep the weighted confluence score visible even when entry filters
+    # hold the action at WAIT. This is setup strength, not a trade instruction
+    # or a win-probability estimate.
     score = max(0, min(100, int(result.get("score") or 0)))
-    if direction == "WAIT":
-        score = 0
     latest = candles[-1]
     candle_time = latest.get("time", latest.get("timestamp"))
     signal_id = f"{broker_asset(req.asset)}:{req.timeframe_seconds}:{candle_time}:{direction}" if candle_time is not None and direction in {"UP", "DOWN"} else None
