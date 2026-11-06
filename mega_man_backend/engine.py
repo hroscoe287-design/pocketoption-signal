@@ -57,7 +57,8 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     dim_series=[100*x/y for x,y in zip(m7,t7) if y]
     dip,dim=100*p7[-1]/t7[-1],100*m7[-1]/t7[-1]
     di_spread=dip-dim
-    prev_spread=(100*p7[-2]/t7[-2]-100*m7[-2]/t7[-2]) if len(p7)>1 and t7[-2] else di_spread
+    di_spread_series=[(100*a/b-100*c/d) if b and d else 0.0 for a,b,c,d in zip(p7,t7,m7,t7)]
+    prev_spread=di_spread_series[-2] if len(di_spread_series)>1 else di_spread
     di_velocity=di_spread-prev_spread
     # On very short charts, react to direction changes, not just line position.
     # Use a short multi-bar slope so a single tiny fluctuation is not over-read.
@@ -109,8 +110,24 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     # and a high-pivot/up arrow is bearish (SELL), per the user's chart convention.
     # The pivot at -4 has three completed candles on its right.
     fractal_direction=1 if fl else -1 if fh else 0
-    # Entry requires a NEW, actual DI crossover. Forecasts are informational only.
-    di_cross_direction=1 if prev_spread<=0<di_spread else -1 if prev_spread>=0>di_spread else 0
+    # Entry requires a recent actual DI crossover. The confirmed period-3
+    # fractal is only knowable after three right-side candles, so requiring
+    # the DI cross on the exact same update misses otherwise aligned setups.
+    # Accept a cross in the latest three completed DI observations, but only
+    # while the current spread still agrees with that cross direction.
+    di_cross_direction=0
+    for j in range(len(di_spread_series)-1, max(0, len(di_spread_series)-4), -1):
+        before, after = di_spread_series[j-1], di_spread_series[j]
+        if before <= 0 < after:
+            di_cross_direction=1
+            break
+        if before >= 0 > after:
+            di_cross_direction=-1
+            break
+    if di_cross_direction == 1 and di_spread <= 0:
+        di_cross_direction=0
+    elif di_cross_direction == -1 and di_spread >= 0:
+        di_cross_direction=0
     di_cross_confirmed=bool(di_cross_direction)
     fractal_di_aligned=bool(fractal_direction and fractal_direction==di_cross_direction)
     # Wider X gets more weight. Very short 5s/15s charts may use a smaller
