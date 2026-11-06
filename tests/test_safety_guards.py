@@ -3,7 +3,7 @@ import unittest
 
 from godmode_strategy import GodModeStrategy
 from godmode_enhancements import analyze
-from hybrid_engine import CombinedEngine
+from hybrid_engine import CombinedEngine, _fractal_signal, _di_cross_signal
 from market_feed import normalize_historical_candles, ticks_to_candles
 
 
@@ -25,6 +25,17 @@ def bars(count=40):
 
 
 class FeedSafetyTests(unittest.TestCase):
+    def test_user_fractal_arrow_convention_is_respected(self):
+        self.assertEqual(_fractal_signal("DOWN"), "BUY")
+        self.assertEqual(_fractal_signal("UP"), "SELL")
+        self.assertEqual(_fractal_signal(None), "WAIT")
+
+    def test_di_cross_only_confirms_on_actual_zero_line_cross(self):
+        self.assertEqual(_di_cross_signal(1.2, -0.4), "BUY")
+        self.assertEqual(_di_cross_signal(-1.2, 0.4), "SELL")
+        self.assertEqual(_di_cross_signal(1.2, 0.4), "WAIT")
+        self.assertEqual(_di_cross_signal(-1.2, -0.4), "WAIT")
+
     def test_godmode_never_signals_without_verified_live_feed(self):
         result = GodModeStrategy().update(bars(), "EURUSD_otc", 5, False)
         self.assertIsNone(result["signal"])
