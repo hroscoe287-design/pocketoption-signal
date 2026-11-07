@@ -10,6 +10,7 @@ import math, random, os, json, threading, time, logging, zipfile
 from godmode_strategy import GodModeStrategy
 from godmode_enhancements import analyze as analyze_enhancements
 from hybrid_engine import CombinedEngine
+from ai_judge import observe as observe_ai_judge
 from market_feed import normalize_historical_candles, ticks_to_candles
 
 _godmode_engine = GodModeStrategy()
@@ -701,7 +702,7 @@ def snapshot(tf=None, asset=None):
     entry_status = ("FEED UNAVAILABLE" if not is_live else
                     ("LATE — SKIP ENTRY" if age_fraction >= 0.65 else
                      ("WAIT FOR FRESH CANDLE" if age_fraction >= 0.35 else "FRESH WINDOW")))
-    return {
+    result = {
         "asset": ASSET, "timeframe_seconds": step, "price": round(closes[-1], 6) if is_live else None,
         "signal": signal, "score": score if is_live else 0,
         "confidence": strength, "strength_label": strength_label if is_live else "UNAVAILABLE",
@@ -739,6 +740,9 @@ def snapshot(tf=None, asset=None):
         "feed_status": _po_status,
         "godmode": {**_godmode_engine.update(_bars, ASSET, step, is_live), "signal": signal, "hybrid_engine": hybrid}
     }
+    result["live"] = is_live
+    result["ai_judge"] = observe_ai_judge(result)
+    return result
 
 @app.get("/api/market")
 def market(tf: int = 15, asset: str = ASSET):
