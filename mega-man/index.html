@@ -41,6 +41,54 @@ const $=id=>document.getElementById(id);
 const API_BASE=window.MEGA_MAN_API_BASE||'https://mega-man-signal-api.onrender.com';
 let signalAudioContext=null, signalSoundEnabled=false;
 const playedSignalIds=new Set();
+let activeEntryWatch=null;
+const reachedEntryIds=new Set();
+function updateEntryWatchPanel(status,detail){
+ const state=document.getElementById('entryWatchState'),price=document.getElementById('entryWatchPrice'),meta=document.getElementById('entryWatchMeta');
+ if(state)state.textContent=status;
+ if(detail&&meta)meta.textContent=detail;
+ if(activeEntryWatch&&price)price.textContent=String(activeEntryWatch.entry);
+}
+function setActiveEntryWatch(d){
+ if(!d||!d.verified||!['UP','DOWN'].includes(d.signal)||!Number.isFinite(Number(d.entry_price??d.price))){
+  activeEntryWatch=null;updateEntryWatchPanel('NO ACTIVE ENTRY','Generate a verified UP or DOWN signal to start watching.');return;
+ }
+ const entry=Number(d.entry_price??d.price),id=String(d.signal_id||[d.asset,d.timeframe_seconds,d.signal,entry,Date.now()].join('|'));
+ activeEntryWatch={id,asset:String(d.asset||''),tf:Number(d.timeframe_seconds||5),direction:d.signal,entry,lastPrice:Number(d.price??entry),armed:false,triggered:false};
+ updateEntryWatchPanel('WAITING FOR ENTRY PRICE','Watching verified live Pocket Option quotes · '+activeEntryWatch.asset+' · '+activeEntryWatch.direction+' · move away, then return to entry.');
+}
+function playEntryPriceReachedBing(){
+ if(!signalSoundEnabled)return;
+ try{
+  signalAudioContext=signalAudioContext||new (window.AudioContext||window.webkitAudioContext)();
+  if(signalAudioContext.state==='suspended')signalAudioContext.resume();
+  const now=signalAudioContext.currentTime;
+  [1174.66,1567.98].forEach((frequency,index)=>{
+   const start=now+index*.16,osc=signalAudioContext.createOscillator(),gain=signalAudioContext.createGain();
+   osc.type='sine';osc.frequency.setValueAtTime(frequency,start);
+   gain.gain.setValueAtTime(.0001,start);gain.gain.exponentialRampToValueAtTime(.2,start+.02);
+   gain.gain.exponentialRampToValueAtTime(.0001,start+.14);
+   osc.connect(gain);gain.connect(signalAudioContext.destination);osc.start(start);osc.stop(start+.15);
+  });
+ }catch(error){console.warn('Mega Man entry-price audio unavailable',error);}
+}
+function checkEntryPrice(d,asset,tf){
+ const w=activeEntryWatch;if(!w||w.triggered||w.asset!==String(asset)||w.tf!==Number(tf)||!d?.verified)return;
+ const price=Number(d.price);if(!Number.isFinite(price))return;
+ const decimals=(String(w.entry).split('.')[1]||'').length;
+ const tolerance=Math.pow(10,-Math.max(1,decimals))*.51;
+ if(!w.armed){
+  if(Math.abs(price-w.entry)>tolerance){w.armed=true;w.lastPrice=price;updateEntryWatchPanel('ARMED · WATCHING LIVE PRICE','Live quote moved away from '+w.entry+'; waiting for it to touch/cross the entry level.');}
+  return;
+ }
+ const crossed=(w.lastPrice<w.entry-tolerance&&price>=w.entry-tolerance)||(w.lastPrice>w.entry+tolerance&&price<=w.entry+tolerance)||Math.abs(price-w.entry)<=tolerance;
+ w.lastPrice=price;
+ if(!crossed)return;
+ w.triggered=true;reachedEntryIds.add(w.id);
+ updateEntryWatchPanel('ENTRY PRICE REACHED','BING · '+w.asset+' touched '+w.entry+' · one alert for this signal.');
+ const state=document.getElementById('entryWatchState');if(state)state.style.color='#22ed86';
+ playEntryPriceReachedBing();
+}
 function playEntryBing(direction,signalId){
  if(!signalSoundEnabled||!['UP','DOWN'].includes(direction))return;
  const key=String(signalId||[document.getElementById('asset')?.value,document.getElementById('tf')?.value,direction].join('|'));
@@ -109,7 +157,7 @@ async function loadBrokerAssets(){
 }
 $('tf').addEventListener('change',()=>{const n=Number($('tf').value);const label=n<60?n+' sec':n<3600?(n/60)+' min':n<86400?(n/3600)+' hr':'1 day';$('expiryLabel').textContent=label;$('expiry').textContent=n<60?'00:'+String(n).padStart(2,'0'):n<3600?String(Math.floor(n/60)).padStart(2,'0')+':00':n<86400?String(Math.floor(n/3600)).padStart(2,'0')+':00:00':'1 day'});
 function reset(){['up','down'].forEach(id=>$(id).style.filter='brightness(.5)');$('wait').style.filter='none';$('confidence').textContent='—';$('meter').style.width='0%';$('price').textContent='—';$('quality').textContent='UNVERIFIED';$('qdetail').textContent='Live feed not connected';$('engine').textContent='WAITING FOR VERIFIED DATA';}
-loadBrokerAssets();$('generate').addEventListener('click',async()=>{const btn=$('generate');btn.disabled=true;btn.textContent='⟳  ANALYZING MARKET…';$('notice').classList.remove('show');reset();const steps=[['Reading verified market context…','s1'],['Measuring volatility and candle movement…','s2'],['Matching DI, MACD and price patterns…','s3'],['Checking signal eligibility and fakeout risk…','s4']];steps.forEach(([v,id])=>$(id).textContent=v);$('engine').textContent='CHECKING ANALYSIS SERVICE';try{const base=API_BASE;const response=await fetch(base.replace(/\/$/,'')+'/api/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({asset:$('asset').value,timeframe_seconds:Number($('tf').value)})});if(!response.ok){let detail='Analysis service returned HTTP '+response.status;try{const err=await response.json();const v=err.detail;detail=typeof v==='string'?v:(v&&v.message?[v.message,v.feed_status?'Feed: '+v.feed_status:'',v.auth_status?'Auth: '+v.auth_status:''].filter(Boolean).join(' — '):(JSON.stringify(v||err)));}catch(_){}throw new Error(detail)}const d=await response.json();if(!d||!['UP','DOWN','WAIT'].includes(d.signal)||!d.verified)throw new Error('No verified signal was returned. Waiting is safer than guessing.');if(d.signal==='UP'||d.signal==='DOWN')playEntryBing(d.signal,d.signal_id);$('up').style.filter=d.signal==='UP'?'none':'brightness(.5)';$('down').style.filter=d.signal==='DOWN'?'none':'brightness(.5)';$('wait').style.filter=d.signal==='WAIT'?'none':'brightness(.5)';$('confidence').textContent=Number.isFinite(d.confidence)?Math.round(d.confidence)+'%':'—';$('meter').style.width=(Number.isFinite(d.confidence)?Math.max(0,Math.min(100,d.confidence)):0)+'%';$('price').textContent=d.price??'—';$('quality').textContent='VERIFIED';$('qdetail').textContent=d.data_quality||'Verified feed';$('engine').textContent='ANALYSIS COMPLETE';const a=d.analysis||{};const comp=a.components||{};const reason=a.reason||'Verified candle analysis complete.';const stages=Array.isArray(a.stages)?a.stages:[];if(stages.length>=4){['s1','s2','s3','s4'].forEach((id,i)=>$(id).textContent=stages[i].summary||stages[i].name)}else{$('s1').textContent='Verified live candles: '+(d.candle_count??'—');$('s2').textContent='ATR14 '+(comp.atr14??'—')+' · volatility '+(comp.volatility_pct??'—')+'%';$('s3').textContent='DI spread '+(comp.di_spread??'—')+' · MACD/WaveTrend checked';$('s4').textContent=reason+' · manual confirmation only';}const engineNote=document.querySelector('.rightcol .panel:last-child .disclaimer');if(engineNote)engineNote.textContent='Latest analysis: '+reason+' Indicator strength is not a calibrated win probability. Automatic trading remains off.';const tr=document.createElement('tr');[new Date().toLocaleTimeString(),$('asset').value,d.signal,'Pending outcome'].forEach(v=>{const td=document.createElement('td');td.textContent=v;tr.appendChild(td)});if($('history').querySelector('.empty'))$('history').innerHTML='';$('history').prepend(tr)}catch(e){$('engine').textContent='NOT CONNECTED';$('notice').textContent=e.message;$('notice').classList.add('show');$('s1').textContent='Blocked: no verified live market feed';$('s2').textContent='Not calculated';$('s3').textContent='Not calculated';$('s4').textContent='No signal issued';$('s4').textContent='Waiting for API connection'}finally{btn.disabled=false;btn.textContent='⚡  GENERATE SIGNAL'}});
+loadBrokerAssets();$('generate').addEventListener('click',async()=>{const btn=$('generate');btn.disabled=true;btn.textContent='⟳  ANALYZING MARKET…';$('notice').classList.remove('show');reset();const steps=[['Reading verified market context…','s1'],['Measuring volatility and candle movement…','s2'],['Matching DI, MACD and price patterns…','s3'],['Checking signal eligibility and fakeout risk…','s4']];steps.forEach(([v,id])=>$(id).textContent=v);$('engine').textContent='CHECKING ANALYSIS SERVICE';try{const base=API_BASE;const response=await fetch(base.replace(/\/$/,'')+'/api/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({asset:$('asset').value,timeframe_seconds:Number($('tf').value)})});if(!response.ok){let detail='Analysis service returned HTTP '+response.status;try{const err=await response.json();const v=err.detail;detail=typeof v==='string'?v:(v&&v.message?[v.message,v.feed_status?'Feed: '+v.feed_status:'',v.auth_status?'Auth: '+v.auth_status:''].filter(Boolean).join(' — '):(JSON.stringify(v||err)));}catch(_){}throw new Error(detail)}const d=await response.json();if(!d||!['UP','DOWN','WAIT'].includes(d.signal)||!d.verified)throw new Error('No verified signal was returned. Waiting is safer than guessing.');if(d.signal==='UP'||d.signal==='DOWN'){playEntryBing(d.signal,d.signal_id);setActiveEntryWatch(d);}else{setActiveEntryWatch(null);}$('up').style.filter=d.signal==='UP'?'none':'brightness(.5)';$('down').style.filter=d.signal==='DOWN'?'none':'brightness(.5)';$('wait').style.filter=d.signal==='WAIT'?'none':'brightness(.5)';$('confidence').textContent=Number.isFinite(d.confidence)?Math.round(d.confidence)+'%':'—';$('meter').style.width=(Number.isFinite(d.confidence)?Math.max(0,Math.min(100,d.confidence)):0)+'%';$('price').textContent=d.price??'—';$('quality').textContent='VERIFIED';$('qdetail').textContent=d.data_quality||'Verified feed';$('engine').textContent='ANALYSIS COMPLETE';const a=d.analysis||{};const comp=a.components||{};const reason=a.reason||'Verified candle analysis complete.';const stages=Array.isArray(a.stages)?a.stages:[];if(stages.length>=4){['s1','s2','s3','s4'].forEach((id,i)=>$(id).textContent=stages[i].summary||stages[i].name)}else{$('s1').textContent='Verified live candles: '+(d.candle_count??'—');$('s2').textContent='ATR14 '+(comp.atr14??'—')+' · volatility '+(comp.volatility_pct??'—')+'%';$('s3').textContent='DI spread '+(comp.di_spread??'—')+' · MACD/WaveTrend checked';$('s4').textContent=reason+' · manual confirmation only';}const engineNote=document.querySelector('.rightcol .panel:last-child .disclaimer');if(engineNote)engineNote.textContent='Latest analysis: '+reason+' Indicator strength is not a calibrated win probability. Automatic trading remains off.';const tr=document.createElement('tr');[new Date().toLocaleTimeString(),$('asset').value,d.signal,'Pending outcome'].forEach(v=>{const td=document.createElement('td');td.textContent=v;tr.appendChild(td)});if($('history').querySelector('.empty'))$('history').innerHTML='';$('history').prepend(tr)}catch(e){$('engine').textContent='NOT CONNECTED';$('notice').textContent=e.message;$('notice').classList.add('show');$('s1').textContent='Blocked: no verified live market feed';$('s2').textContent='Not calculated';$('s3').textContent='Not calculated';$('s4').textContent='No signal issued';$('s4').textContent='Waiting for API connection'}finally{btn.disabled=false;btn.textContent='⚡  GENERATE SIGNAL'}});
 </script>
 <script id="mega-man-live-di-watch">
 (() => {
@@ -125,6 +173,11 @@ loadBrokerAssets();$('generate').addEventListener('click',async()=>{const btn=$(
     panel.id = "diWatch";
     panel.innerHTML = '<h2>LIVE / ADX + DI WATCH</h2><div class="hint" id="diWatchStatus" aria-live="polite">Starting live line monitor…</div><div class="stats"><div class="stat"><span>DI+ · BUY PRESSURE</span><strong id="livePlus">—</strong><span id="livePlusSlope">Waiting for live data</span></div><div class="stat"><span>DI− · SELL PRESSURE</span><strong id="liveMinus">—</strong><span id="liveMinusSlope">Waiting for live data</span></div><div class="stat"><span>ADX(14) · TREND STRENGTH</span><strong id="liveAdx">—</strong><span id="liveAdxNote">Strength only, not direction</span></div><div class="stat"><span>DI LINE RELATIONSHIP</span><strong id="liveCross">WAIT</strong><span id="liveCrossNote">Watching line movement</span></div></div><div class="stat" style="margin-top:10px"><span>UPCOMING DI PROJECTION · NEXT 1–3 BARS</span><strong id="diForecastLabel">WAITING</strong><span id="diForecastDetail">Estimating DI+ and DI− direction</span><div id="diForecastSteps" class="hint">Projection will appear after verified data</div></div><div class="disclaimer">Refreshes automatically while this page is open. DI direction and line crosses are monitored separately from ADX strength. Signal-only mode; automatic trading remains OFF.</div>';
     right.prepend(panel);
+    const entryPanel=document.createElement('section');
+    entryPanel.className='panel';entryPanel.id='entryPriceWatch';
+    entryPanel.innerHTML='<h2>LIVE ENTRY PRICE ALERT</h2><div class="hint">Tracks the signal entry against verified Pocket Option live quotes.</div><div class="stat" style="margin-top:10px"><span>ENTRY PRICE</span><strong id="entryWatchPrice">—</strong><span id="entryWatchState" aria-live="polite">NO ACTIVE ENTRY</span><span id="entryWatchMeta" class="hint">Generate a verified UP or DOWN signal to start watching.</span></div><div class="disclaimer">One BING when price moves away and then touches/crosses the entry level. No projected prices. Automatic trading remains OFF.</div>';
+    right.insertBefore(entryPanel,panel.nextSibling);
+    if(activeEntryWatch)updateEntryWatchPanel(activeEntryWatch.triggered?'ENTRY PRICE REACHED':activeEntryWatch.armed?'ARMED · WATCHING LIVE PRICE':'WAITING FOR ENTRY PRICE','Watching verified live Pocket Option quotes · '+activeEntryWatch.asset+' · '+activeEntryWatch.direction+'.');
   }
   function slopeText(delta, fallingTwo, risingTwo, positiveName, negativeName) {
     if (risingTwo) return "Rising for 2 bars ↑";
@@ -147,6 +200,7 @@ loadBrokerAssets();$('generate').addEventListener('click',async()=>{const btn=$(
       });
       const d = await r.json();
       if (!r.ok || !d?.verified) throw new Error(d?.detail?.message || d?.detail || "Waiting for verified live candles");
+      checkEntryPrice(d,asset,tf);
       const c = d.analysis?.components || {};
       if (c.plus_di_7 == null || c.minus_di_7 == null || c.adx_14 == null) throw new Error("Waiting for DI/ADX calculations");
       $("livePlus").textContent = fmt(c.plus_di_7);
