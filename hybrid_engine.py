@@ -190,6 +190,25 @@ class CombinedEngine:
         else:
             x_status, x_quality, fakeout_risk = "NO CLEAR X", 0, "ELEVATED"
 
+        # MEGA MAN direction model: DI spread leads; fractal is confirmation.
+        # User convention: a DOWN-pointing fractal arrow maps to BUY, UP maps to SELL.
+        fractal_direction = _fractal_signal(fractal["arrow"]) if fractal else "WAIT"
+        di_direction = "BUY" if spread_now > 0 else ("SELL" if spread_now < 0 else "WAIT")
+        # Permit persistent post-cross direction while the DI lines remain separated.
+        # The minimum separation is modest on very short charts and stricter on longer ones.
+        separation_floor = min(5.0, max(2.0, float(timeframe_seconds) / 15.0))
+        di_has_direction = gap >= separation_floor
+        score_direction = di_direction if di_has_direction else (early_direction if early_warning else "WAIT")
+        fractal_aligned = fractal_direction == score_direction and score_direction != "WAIT"
+        last_close = float(candles[-1]["close"])
+        prior_close = float(candles[-2]["close"])
+        price_confirms = (last_close >= prior_close if score_direction == "BUY"
+                          else (last_close <= prior_close if score_direction == "SELL" else False))
+        trend_not_dead = bool((adx is not None and adx >= 10) or strong_x or (wide and widening))
+        # Display-only DI box counts, scaled in five-point bands.
+        plus_boxes = max(0, int(round(plus / 5.0)))
+        minus_boxes = max(0, int(round(minus / 5.0)))
+
         # FRACTAL-3 + DI weighted score. Score every live evaluation, including
         # after the crossover candle; only the actual entry signal has stricter gates.
         # This is a setup-strength index, never a calibrated win probability.
