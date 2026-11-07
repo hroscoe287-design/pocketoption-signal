@@ -139,6 +139,18 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     di_gap_valid=abs(di_spread)>=min_di_gap
     di_momentum_aligned=bool(di_direction and di_velocity*di_direction>0)
     acceleration_aligned=bool(di_direction and di_accel*di_direction>0)
+    # Explicitly recognize a broad bearish/bullish DI "X": the winning DI
+    # line is rising while the opposing line is falling and the spread is
+    # already wide and expanding. This remains valid after the zero-line
+    # crossover, even when the confirmed fractal arrives later.
+    bearish_di_expansion=bool(
+        di_direction==-1 and di_gap_valid and di_minus_rising_two_bars
+        and di_plus_falling_two_bars and di_velocity<0
+    )
+    bullish_di_expansion=bool(
+        di_direction==1 and di_gap_valid and di_plus_delta>0
+        and di_minus_delta<0 and di_velocity>0
+    )
     bullish_di_rollover_block=bool(timeframe_seconds<=15 and di_direction==1 and (
         di_plus_turning_down or (di_minus_rising_two_bars and macd_fading)
     ))
@@ -158,6 +170,10 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     if di_momentum_aligned: score+=10
     if acceleration_aligned: score+=5
     if di_cross_confirmed and di_cross_direction==di_direction: score+=5
+    # A wide, expanding DI X is a primary pattern, not merely a small bonus.
+    # Reward the actual line motion so a bearish -DI-over-+DI crossover is
+    # not missed just because the fractal confirmation is delayed.
+    if bearish_di_expansion or bullish_di_expansion: score+=15
     if adx>=25: score+=15
     elif adx>=20: score+=12
     elif adx>=15: score+=9
@@ -210,6 +226,7 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
       "spread_acceleration":round(di_accel,3),"di_plus_delta":round(di_plus_delta,3),
       "di_minus_delta":round(di_minus_delta,3),"di_plus_turning_down":di_plus_turning_down,
       "di_plus_falling_two_bars":di_plus_falling_two_bars,"di_minus_rising_two_bars":di_minus_rising_two_bars,
+      "bearish_di_expansion":bearish_di_expansion,"bullish_di_expansion":bullish_di_expansion,
       "macd_fading":macd_fading,"di_forecast":di_projection,
       "bullish_di_rollover_block":bullish_di_rollover_block,"timeframe_seconds":timeframe_seconds,
       "early_cross":early_cross,"fractal_high_confirmed":fh,
