@@ -34,7 +34,7 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     except (ValueError,TypeError,KeyError,OverflowError):
         return {"direction":"WAIT","score":0,"ready":False,"eligible":False,"reason":"Malformed candles","components":{}}
     e9,e21=ema(close,9),ema(close,21)
-    rv=rsi(close,14)
+    rv=rsi(close,5)
     # MACD 12/26/9
     macd=[a-b for a,b in zip(ema(close,12),ema(close,26))]
     ms=ema(macd,9); hist=macd[-1]-ms[-1]
@@ -202,7 +202,7 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
         {"name":"Pattern Matching","status":"complete","summary":pattern_context},
         {"name":"Finalizing Signal","status":"complete" if eligible else "blocked","summary":final_context}
       ],
-      "components":{"atr14":round(atr14,8),"volatility_pct":round(volatility_pct,5),"latest_candle_body_ratio":round(body_ratio,3),"ema9":round(e9[-1],6),"ema21":round(e21[-1],6),"rsi14":round(rv,2) if rv is not None else None,
+      "components":{"atr14":round(atr14,8),"volatility_pct":round(volatility_pct,5),"latest_candle_body_ratio":round(body_ratio,3),"ema9":round(e9[-1],6),"ema21":round(e21[-1],6),"rsi5":round(rv,2) if rv is not None else None,
       "macd_histogram":round(hist,7),"wave_trend_1":round(wt1[-1],3),"wave_trend_2":round(wt2[-1],3),
       "alligator_jaw":round(jaw,6),"alligator_teeth":round(teeth,6),"alligator_lips":round(lips,6),
       "plus_di_7":round(dip,3),"minus_di_7":round(dim,3),"plus_di_14":round(dip14,3),"minus_di_14":round(dim14,3),
