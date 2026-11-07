@@ -44,13 +44,38 @@ def _connect():
 
 
 def _features(snapshot):
+    """Capture the signal's actual DI/fractal context, including nested engine fields."""
+    hybrid = snapshot.get("hybrid_engine") or {}
     keys = (
         "plus_di", "minus_di", "di_spread", "di_spread_velocity",
         "di_spread_acceleration", "adx", "fractal_arrow", "wide_x",
         "x_status", "fakeout_risk", "weighted_score", "weighted_direction",
+        "fractal_direction", "di_direction", "di_cross_status",
+        "early_x_warning", "early_x_direction", "desire_score",
+        "fractal_setup_strength", "x_quality_adjustment",
     )
-    return {key: snapshot.get(key) for key in keys}
-
+    features = {}
+    for key in keys:
+        value = snapshot.get(key)
+        if value is None:
+            value = hybrid.get(key)
+        features[key] = value
+    if features.get("di_spread") is None:
+        try:
+            features["di_spread"] = float(features["plus_di"]) - float(features["minus_di"])
+        except (TypeError, ValueError):
+            features["di_spread"] = None
+    # Preserve the complete compact engine context for later pattern comparisons.
+    features["engine_context"] = {
+        key: hybrid.get(key) for key in (
+            "plus_di", "minus_di", "di_spread", "di_spread_velocity",
+            "di_spread_acceleration", "adx", "fractal_arrow", "wide_x",
+            "x_status", "fakeout_risk", "weighted_score", "weighted_direction",
+            "di_cross_status", "early_x_warning", "early_x_direction",
+            "fractal_setup_strength",
+        ) if key in hybrid
+    }
+    return features
 
 def _settle_due(conn, asset, timeframe_seconds, live_price, now):
     rows = conn.execute(
