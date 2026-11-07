@@ -73,7 +73,7 @@ function playEntryPriceReachedBing(){
  }catch(error){console.warn('Mega Man entry-price audio unavailable',error);}
 }
 function checkEntryPrice(d,asset,tf){
- const w=activeEntryWatch;if(!w||w.triggered||w.asset!==String(asset)||w.tf!==Number(tf)||!d?.verified)return;
+ const w=activeEntryWatch;if(!w||w.triggered||w.asset!==String(d?.asset||asset)||w.tf!==Number(tf)||!d?.verified)return;
  const price=Number(d.price);if(!Number.isFinite(price))return;
  const decimals=(String(w.entry).split('.')[1]||'').length;
  const tolerance=Math.pow(10,-Math.max(1,decimals))*.51;
