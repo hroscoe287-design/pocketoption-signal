@@ -293,4 +293,81 @@ loadBrokerAssets();$('generate').addEventListener('click',async()=>{const btn=$(
   if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",start,{once:true});else start();
 })();
 </script>
+
+<script id="mega-man-live-di-chart">
+(() => {
+  const $ = id => document.getElementById(id);
+  let busy = false, timer = null, history = [], lastKey = "";
+  const apiBase = () => (window.MEGA_MAN_API_BASE || "https://mega-man-signal-api.onrender.com").replace(/\/$/, "");
+  function mount() {
+    if ($("diLineChart")) return;
+    const right = document.querySelector(".rightcol");
+    if (!right) return;
+    const panel = document.createElement("section");
+    panel.className = "panel";
+    panel.id = "diLinePanel";
+    panel.innerHTML = '<h2>LIVE +DI / −DI LINES</h2><div class="hint" id="diLineStatus">Waiting for verified Pocket Option candles…</div><div style="width:100%;height:190px;background:#030b16;border:1px solid #214565;border-radius:10px;overflow:hidden"><canvas id="diLineChart" style="display:block;width:100%;height:190px"></canvas></div><div class="hint" style="display:flex;justify-content:space-between;gap:12px;margin-top:8px"><span style="color:#35d98a">━ +DI (BUY PRESSURE)</span><span style="color:#ff5c70">━ −DI (SELL PRESSURE)</span><span>LENGTH 7 · SMOOTH 14</span></div><div class="disclaimer">Live DI history from verified candles only. ADX main line is not plotted or used by this display.</div>';
+    right.prepend(panel);
+  }
+  function wilder(values, n) {
+    if (values.length < n) return [];
+    const out = [values.slice(0,n).reduce((a,b)=>a+b,0)/n];
+    for (let i=n;i<values.length;i++) out.push((out[out.length-1]*(n-1)+values[i])/n);
+    return out;
+  }
+  function buildSeries(bars) {
+    if (!Array.isArray(bars) || bars.length < 8) return [];
+    const tr=[], plus=[], minus=[];
+    for (let i=1;i<bars.length;i++) {
+      const h=Number(bars[i].high), l=Number(bars[i].low), ph=Number(bars[i-1].high), pl=Number(bars[i-1].low), pc=Number(bars[i-1].close);
+      const up=h-ph, down=pl-l;
+      plus.push(up>down && up>0 ? up : 0);
+      minus.push(down>up && down>0 ? down : 0);
+      tr.push(Math.max(h-l,Math.abs(h-pc),Math.abs(l-pc)));
+    }
+    const atr=wilder(tr,7), p=wilder(plus,7), m=wilder(minus,7), n=Math.min(atr.length,p.length,m.length), out=[];
+    for(let i=0;i<n;i++) out.push({plus:atr[i]?p[i]/atr[i]*100:0,minus:atr[i]?m[i]/atr[i]*100:0});
+    return out.slice(-70);
+  }
+  function draw(series) {
+    const canvas=$("diLineChart"); if(!canvas) return;
+    const ratio=window.devicePixelRatio||1, width=Math.max(280,canvas.clientWidth||520), height=190;
+    canvas.width=Math.floor(width*ratio); canvas.height=Math.floor(height*ratio);
+    const ctx=canvas.getContext("2d"); ctx.setTransform(ratio,0,0,ratio,0,0);
+    ctx.clearRect(0,0,width,height); ctx.fillStyle="#030b16"; ctx.fillRect(0,0,width,height);
+    const left=38,right=12,top=24,bottom=height-24;
+    ctx.fillStyle="#91a9c5";ctx.font="10px system-ui";ctx.fillText("DI VALUE",6,13);
+    if(series.length<2){ctx.fillStyle="#91a9c5";ctx.font="12px system-ui";ctx.fillText("Collecting DI history from live candles…",left,50);return;}
+    let max=25; for(const p of series) max=Math.max(max,Number(p.plus)||0,Number(p.minus)||0);
+    const step=(width-left-right)/(series.length-1);
+    for(let i=0;i<=4;i++){const y=bottom-i*(bottom-top)/4;ctx.strokeStyle="rgba(145,169,197,.16)";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(width-right,y);ctx.stroke();ctx.fillStyle="#7189a5";ctx.font="9px system-ui";ctx.fillText(String(Math.round(max*i/4)),5,y+3);}
+    function line(key,color){ctx.strokeStyle=color;ctx.lineWidth=2.2;ctx.lineJoin="round";ctx.lineCap="round";ctx.beginPath();for(let i=0;i<series.length;i++){const x=left+i*step,y=bottom-(Number(series[i][key])||0)/max*(bottom-top);if(i)ctx.lineTo(x,y);else ctx.moveTo(x,y);}ctx.stroke();}
+    line("plus","#35d98a");line("minus","#ff5c70");
+    const last=series[series.length-1],gap=Math.abs(last.plus-last.minus);
+    ctx.font="10px system-ui";ctx.fillStyle="#35d98a";ctx.fillText("+DI "+last.plus.toFixed(2),left,bottom+17);
+    ctx.fillStyle="#ff5c70";ctx.fillText("−DI "+last.minus.toFixed(2),left+105,bottom+17);
+    ctx.fillStyle=gap>=5?"#ffd21c":"#91a9c5";ctx.fillText(gap>=5?"WIDE X":"OVERLAP",width-85,bottom+17);
+  }
+  async function poll(){
+    if(busy||document.visibilityState==="hidden")return;
+    const asset=$("asset")?.value, tf=Number($("tf")?.value||5); if(!asset)return;
+    busy=true;
+    try{
+      const r=await fetch(apiBase()+"/api/market?asset="+encodeURIComponent(asset)+"&tf="+tf,{cache:"no-store"});
+      const d=await r.json();
+      if(!r.ok||!d?.verified||!Array.isArray(d.bars)||!d.bars.length)throw new Error(d?.feed_status||"Waiting for verified live candles");
+      const key=asset+"|"+tf;
+      if(key!==lastKey){lastKey=key;history=[];}
+      const series=buildSeries(d.bars);draw(series);
+      const status=$("diLineStatus");
+      if(status){status.textContent="VERIFIED LIVE · "+asset+" · "+(tf<60?tf+"s":tf%60===0?(tf/60)+"m":tf+"s")+" · "+d.bars.length+" candles";status.style.color="#22ed86";}
+    }catch(e){const status=$("diLineStatus");if(status){status.textContent="DI CHART WAITING · "+String(e.message||e).slice(0,110);status.style.color="#ffca62";}}
+    finally{busy=false;}
+  }
+  function schedule(){if(timer)clearInterval(timer);poll();timer=setInterval(poll,4000);}
+  function start(){mount();schedule();$("asset")?.addEventListener("change",poll);$("tf")?.addEventListener("change",schedule);window.addEventListener("resize",poll);document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")poll();});}
+  if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",start,{once:true});else start();
+})();
+</script>
+
 </body></html>
