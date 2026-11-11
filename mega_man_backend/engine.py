@@ -181,6 +181,17 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     # Secondary trend context contributes at most 15 points.
     context_weights={"ema_9_21":4,"macd":4,"rsi":3,"wavetrend":2,"alligator":2}
     score+=sum(w for k,w in context_weights.items() if votes[k]==di_direction and di_direction)
+    # Highest-priority pattern: confirmed user's directional fractal + a wide,
+    # expanding DI X + the matching DI crossover. Award the maximum setup-strength
+    # score in either direction; existing fakeout/ADX eligibility gates still apply.
+    fractal_wide_x_priority=bool(
+        fractal_di_aligned
+        and (bearish_di_expansion or bullish_di_expansion)
+        and di_cross_confirmed
+        and di_cross_direction==di_direction
+    )
+    if fractal_wide_x_priority:
+        score=100
     score=max(0,score)
 
     # Flag choppy Xs: multiple sign flips in the recent DI history indicate
@@ -230,4 +241,4 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
       "macd_fading":macd_fading,"di_forecast":di_projection,
       "bullish_di_rollover_block":bullish_di_rollover_block,"timeframe_seconds":timeframe_seconds,
       "early_cross":early_cross,"fractal_high_confirmed":fh,
-      "fractal_low_confirmed":fl,"fractal_direction":"BUY" if fractal_direction==1 else "SELL" if fractal_direction==-1 else "WAIT", "di_cross_direction":"BUY" if di_cross_direction==1 else "SELL" if di_cross_direction==-1 else "WAIT", "di_cross_confirmed":di_cross_confirmed, "fractal_di_aligned":fractal_di_aligned, "di_gap_valid":di_gap_valid, "minimum_di_gap":round(min_di_gap,3), "fakeout_risk":fakeout,"votes":votes}}
+      "fractal_low_confirmed":fl,"fractal_direction":"BUY" if fractal_direction==1 else "SELL" if fractal_direction==-1 else "WAIT", "di_cross_direction":"BUY" if di_cross_direction==1 else "SELL" if di_cross_direction==-1 else "WAIT", "di_cross_confirmed":di_cross_confirmed, "fractal_di_aligned":fractal_di_aligned, "fractal_wide_x_priority":fractal_wide_x_priority, "di_gap_valid":di_gap_valid, "minimum_di_gap":round(min_di_gap,3), "fakeout_risk":fakeout,"votes":votes}}
