@@ -274,6 +274,65 @@ loadBrokerAssets();$('generate').addEventListener('click',async()=>{const btn=$(
       ctx.fillRect(x-bodyW/2,top,bodyW,bh);
     });
   }
+  function renderSquares(id, score, color) {
+    const row=$(id); if(!row)return; const filled=Math.max(0,Math.min(10,Math.round((Number(score)||0)/10)));
+    row.replaceChildren();
+    for(let i=0;i<10;i++){const box=document.createElement("span");box.style.cssText="display:block;width:13px;height:13px;flex:0 0 13px;border:1px solid "+color+";border-radius:2px;background:"+(i<filled?color:"transparent")+";opacity:"+(i<filled?"1":".32")+";box-shadow:"+(i<filled?"0 0 7px "+color+"66":"none");row.appendChild(box);}
+  }
+  function updateReadinessDisplay(last) {
+    const a=latestAnalysis, c=a?.analysis?.components||{};
+    const spread=Number(c.di_spread??(last.plus-last.minus));
+    const dir=spread>0?"UP":spread<0?"DOWN":"WAIT";
+    const score=Math.max(0,Math.min(100,Number(a?.analysis?.score)||0));
+    const fractal=String(c.fractal_direction||"WAIT").toUpperCase();
+    const arrow=$("fractalArrow"),meaning=$("fractalMeaning"),momentum=$("momentumShift");
+    if(arrow){
+      arrow.textContent=fractal==="BUY"?"↓ LOW FRACTAL · BULLISH":fractal==="SELL"?"↑ HIGH FRACTAL · BEARISH":"NO CONFIRMED ARROW";
+      arrow.style.color=fractal==="BUY"?"#35d98a":fractal==="SELL"?"#ff5c70":"#dcecff";
+    }
+    if(meaning)meaning.textContent=fractal==="BUY"?"Confirmed lower fractal: bullish reversal setup per Mega Man chart convention.":fractal==="SELL"?"Confirmed upper fractal: bearish reversal setup per Mega Man chart convention.":"Fractal-3 needs three completed candles to confirm; no arrow is confirmed yet.";
+    if(momentum){
+      const vel=Number(c.spread_velocity)||0, accel=Number(c.spread_acceleration)||0;
+      const plusUp=Number(c.di_plus_delta)>0.03, minusUp=Number(c.di_minus_delta)>0.03;
+      const plusDown=Number(c.di_plus_delta)<-0.03, minusDown=Number(c.di_minus_delta)<-0.03;
+      const shift=vel>0.05?"BUY pressure increasing ↑":vel< -0.05?"SELL pressure increasing ↓":"DI momentum mostly flat ↔";
+      const detail="DI+ "+(plusUp?"rising":plusDown?"falling":"flat")+" · DI− "+(minusUp?"rising":minusDown?"falling":"flat")+" · spread acceleration "+(accel>0?"positive":accel<0?"negative":"flat");
+      momentum.textContent="Momentum change: "+shift+" · "+detail;
+    }
+    const label=$("entrySetupLabel"),detail=$("entrySetupDetail");
+    if(label){label.textContent=dir+" · "+score+"/100";label.style.color=dir==="UP"?"#35d98a":dir==="DOWN"?"#ff5c70":"#dcecff";}
+    renderSquares("entrySetupBoxes",score,dir==="UP"?"#35d98a":dir==="DOWN"?"#ff5c70":"#dcecff");
+    if(detail)detail.textContent=(a?.analysis?.eligible?"QUALIFIED BY ENGINE":"NOT QUALIFIED · "+(a?.analysis?.reason||"Waiting for full confluence"))+" · setup strength, not win probability.";
+  }
+  async function refreshAnalysis(asset,tf) {
+    try{
+      const r=await fetch(apiBase()+"/api/analyze",{method:"POST",cache:"no-store",headers:{"Content-Type":"application/json"},body:JSON.stringify({asset,timeframe_seconds:tf})});
+      const a=await r.json(); if(!r.ok||!a?.verified)throw new Error(a?.detail?.message||a?.detail||"Analysis not verified");
+      latestAnalysis=a;
+      const c=a.analysis?.components||{};
+      if($("fractalArrow")&&c.fractal_direction==null){$("fractalArrow").textContent="COLLECTING DATA";$("fractalMeaning").textContent="Waiting for 60 verified candles and fractal confirmation.";}
+      const rows=history;
+      if(rows.length||c.di_spread!=null)updateReadinessDisplay({plus:Number(c.plus_di_7)||0,minus:Number(c.minus_di_7)||0});
+    }catch(e){
+      latestAnalysis=null;
+      if($("fractalArrow"))$("fractalArrow").textContent="ANALYSIS WAITING";
+      if($("fractalMeaning"))$("fractalMeaning").textContent=String(e.message||e).slice(0,130);
+      if($("entrySetupLabel"))$("entrySetupLabel").textContent="WAIT";
+      renderSquares("entrySetupBoxes",0,"#dcecff");
+    }
+  }
+  function updateCandleCountdown(){
+    const out=$("candleCountdown"),detail=$("candleTimeDetail");if(!out||!detail)return;
+    if(!Number.isFinite(latestBarTime)||!latestTf){out.textContent="—";detail.textContent="Waiting for verified candle timestamp";return;}
+    const stamp=latestBarTime>1e12?latestBarTime/1000:latestBarTime;
+    const elapsed=Date.now()/1000-stamp;
+    if(elapsed< -2){out.textContent="SYNC";detail.textContent="Broker candle clock is ahead of this device; syncing timestamp.";return;}
+    const remaining=Math.ceil(latestTf-Math.max(0,elapsed));
+    if(remaining<=0){out.textContent="00";detail.textContent="Candle boundary passed · waiting for the next verified bar.";out.style.color="#ffca62";return;}
+    out.textContent=String(Math.floor(remaining/60)).padStart(2,"0")+":"+String(remaining%60).padStart(2,"0");
+    detail.textContent="Selected timeframe "+(latestTf<60?latestTf+" seconds":latestTf/60+" minutes")+" · countdown from latest verified Pocket Option candle timestamp.";
+    out.style.color=remaining<=5?"#ff4057":"#ffca62";
+  }
   async function poll(){
     if(busy||document.visibilityState==="hidden")return;
     const asset=$("asset")?.value,tf=Number($("tf")?.value||5);if(!asset)return;busy=true;
@@ -285,7 +344,7 @@ loadBrokerAssets();$('generate').addEventListener('click',async()=>{const btn=$(
     }catch(e){$("chartStatus").textContent="CHART WAITING · "+String(e.message||e).slice(0,120);$("chartStatus").style.color="#ffca62";}
     finally{busy=false;}
   }
-  function schedule(){if(timer)clearInterval(timer);poll();timer=setInterval(poll,4000);}
+  function schedule(){if(timer)clearInterval(timer);if(countdownTimer)clearInterval(countdownTimer);poll();timer=setInterval(poll,4000);countdownTimer=setInterval(updateCandleCountdown,250);}
   function start(){schedule();$("asset")?.addEventListener("change",poll);$("tf")?.addEventListener("change",schedule);window.addEventListener("resize",poll);document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")poll();});}
   if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",start,{once:true});else start();
 })();
@@ -294,7 +353,7 @@ loadBrokerAssets();$('generate').addEventListener('click',async()=>{const btn=$(
 <script id="mega-man-live-di-chart">
 (() => {
   const $ = id => document.getElementById(id);
-  let busy = false, timer = null, history = [], lastKey = "";
+  let busy = false, timer = null, history = [], lastKey = "", latestBarTime = null, latestTf = 5, latestAnalysis = null, countdownTimer = null;
   const apiBase = () => (window.MEGA_MAN_API_BASE || "https://mega-man-signal-api.onrender.com").replace(/\/$/, "");
   function mount() {
     if ($("diLineChart")) return;
@@ -303,7 +362,7 @@ loadBrokerAssets();$('generate').addEventListener('click',async()=>{const btn=$(
     const panel = document.createElement("section");
     panel.className = "panel";
     panel.id = "diLinePanel";
-    panel.innerHTML = '<h2>LIVE +DI / −DI LINES</h2><div class="hint" id="diLineStatus">Waiting for verified Pocket Option candles…</div><div style="width:100%;height:190px;background:#030b16;border:1px solid #214565;border-radius:10px;overflow:hidden"><canvas id="diLineChart" style="display:block;width:100%;height:190px"></canvas></div><div class="hint" style="display:flex;justify-content:space-between;gap:12px;margin-top:8px"><span style="color:#35d98a">━ +DI (BUY PRESSURE)</span><span style="color:#ff5c70">━ −DI (SELL PRESSURE)</span><span>LENGTH 7 · SMOOTH 14</span></div><div class="stat" style="margin-top:10px"><div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><span style="font-size:10px;color:#91a9c5">LIVE DI DIRECTION</span><strong id="diBoxDirection" style="font-size:17px;color:#91a9c5">WAIT</strong><strong id="diBoxPercent" style="font-size:20px;color:#fff">—%</strong></div><div style="display:grid;gap:9px;margin-top:10px"><div><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><strong style="font-size:11px;color:#35d98a">DI+ · BUY PRESSURE</strong><strong id="diPlusBoxValue" style="font-size:13px;color:#fff">—</strong></div><div id="diPlusBoxes" aria-label="DI plus white square strength row" style="display:flex;gap:5px;margin-top:5px;align-items:center;min-height:13px"></div></div><div><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><strong style="font-size:11px;color:#ff5c70">DI− · SELL PRESSURE</strong><strong id="diMinusBoxValue" style="font-size:13px;color:#fff">—</strong></div><div id="diMinusBoxes" aria-label="DI minus white square strength row" style="display:flex;gap:5px;margin-top:5px;align-items:center;min-height:13px"></div></div></div><div id="diBoxSplit" class="hint" style="margin-top:6px">UP —% · DOWN —%</div></div><div class="stats" style="margin-top:10px"><div class="stat"><span>UP · DI DIRECTIONAL SHARE</span><strong id="diUpChance" style="color:#35d98a">—%</strong><div class="meter"><i id="diUpMeter" style="width:0;background:#35d98a"></i></div></div><div class="stat"><span>DOWN · DI DIRECTIONAL SHARE</span><strong id="diDownChance" style="color:#ff5c70">—%</strong><div class="meter"><i id="diDownMeter" style="width:0;background:#ff5c70"></i></div></div></div><div class="hint" id="diChanceNote">Waiting for DI readings…</div><div class="disclaimer">Percentages show the current +DI versus −DI pressure split, not a measured win probability or guarantee. Confirm with the full signal score and live price action.</div><div class="disclaimer">Live DI history from verified candles only. ADX main line is not plotted or used by this display.</div>';
+    panel.innerHTML = '<h2>LIVE +DI / −DI LINES</h2><div class="hint" id="diLineStatus">Waiting for verified Pocket Option candles…</div><div style="width:100%;height:190px;background:#030b16;border:1px solid #214565;border-radius:10px;overflow:hidden"><canvas id="diLineChart" style="display:block;width:100%;height:190px"></canvas></div><div class="hint" style="display:flex;justify-content:space-between;gap:12px;margin-top:8px"><span style="color:#35d98a">━ +DI (BUY PRESSURE)</span><span style="color:#ff5c70">━ −DI (SELL PRESSURE)</span><span>LENGTH 7 · SMOOTH 14</span></div><div class="stat" style="margin-top:10px"><div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><span style="font-size:10px;color:#91a9c5">LIVE DI DIRECTION</span><strong id="diBoxDirection" style="font-size:17px;color:#91a9c5">WAIT</strong><strong id="diBoxPercent" style="font-size:20px;color:#fff">—%</strong></div><div style="display:grid;gap:9px;margin-top:10px"><div><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><strong style="font-size:11px;color:#35d98a">DI+ · BUY PRESSURE</strong><strong id="diPlusBoxValue" style="font-size:13px;color:#fff">—</strong></div><div id="diPlusBoxes" aria-label="DI plus white square strength row" style="display:flex;gap:5px;margin-top:5px;align-items:center;min-height:13px"></div></div><div><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><strong style="font-size:11px;color:#ff5c70">DI− · SELL PRESSURE</strong><strong id="diMinusBoxValue" style="font-size:13px;color:#fff">—</strong></div><div id="diMinusBoxes" aria-label="DI minus white square strength row" style="display:flex;gap:5px;margin-top:5px;align-items:center;min-height:13px"></div></div></div><div id="diBoxSplit" class="hint" style="margin-top:6px">UP —% · DOWN —%</div><div class="stat" style="margin-top:10px"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><span>FRACTAL ARROW / MOMENTUM SHIFT</span><strong id="fractalArrow" style="color:#dcecff">WAITING</strong></div><div id="fractalMeaning" class="hint">Waiting for a confirmed 3-bar fractal</div><div id="momentumShift" class="hint" style="margin-top:6px">Momentum change: waiting for DI movement</div></div><div class="stat" style="margin-top:10px"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><span>ENTRY SETUP STRENGTH</span><strong id="entrySetupLabel">WAIT</strong></div><div id="entrySetupBoxes" style="display:flex;gap:5px;margin-top:8px;min-height:13px"></div><div id="entrySetupDetail" class="hint" style="margin-top:6px">Squares fill as the weighted setup score strengthens; they do not place a trade.</div></div><div class="stat" style="margin-top:10px"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><span>TIME LEFT IN CURRENT CANDLE</span><strong id="candleCountdown" style="font-size:22px;color:#ffca62">—</strong></div><div id="candleTimeDetail" class="hint">Waiting for verified candle timestamp</div></div></div><div class="stats" style="margin-top:10px"><div class="stat"><span>UP · DI DIRECTIONAL SHARE</span><strong id="diUpChance" style="color:#35d98a">—%</strong><div class="meter"><i id="diUpMeter" style="width:0;background:#35d98a"></i></div></div><div class="stat"><span>DOWN · DI DIRECTIONAL SHARE</span><strong id="diDownChance" style="color:#ff5c70">—%</strong><div class="meter"><i id="diDownMeter" style="width:0;background:#ff5c70"></i></div></div></div><div class="hint" id="diChanceNote">Waiting for DI readings…</div><div class="disclaimer">Percentages show the current +DI versus −DI pressure split, not a measured win probability or guarantee. Confirm with the full signal score and live price action.</div><div class="disclaimer">Live DI history from verified candles only. ADX main line is not plotted or used by this display.</div>';
     right.prepend(panel);
   }
   function wilder(values, n) {
@@ -339,7 +398,7 @@ loadBrokerAssets();$('generate').addEventListener('click',async()=>{const btn=$(
     for(let i=0;i<=4;i++){const y=bottom-i*(bottom-top)/4;ctx.strokeStyle="rgba(145,169,197,.16)";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(width-right,y);ctx.stroke();ctx.fillStyle="#7189a5";ctx.font="9px system-ui";ctx.fillText(String(Math.round(max*i/4)),5,y+3);}
     function line(key,color){ctx.strokeStyle=color;ctx.lineWidth=2.2;ctx.lineJoin="round";ctx.lineCap="round";ctx.beginPath();for(let i=0;i<series.length;i++){const x=left+i*step,y=bottom-(Number(series[i][key])||0)/max*(bottom-top);if(i)ctx.lineTo(x,y);else ctx.moveTo(x,y);}ctx.stroke();}
     line("plus","#35d98a");line("minus","#ff5c70");
-    const last=series[series.length-1],gap=Math.abs(last.plus-last.minus);
+    const last=series[series.length-1],gap=Math.abs(last.plus-last.minus); updateReadinessDisplay(last);
     const total=Math.max(0,Number(last.plus)||0)+Math.max(0,Number(last.minus)||0);
     const upShare=total>0?Math.round(Math.max(0,last.plus)/total*100):50;
     const downShare=100-upShare;
@@ -370,7 +429,7 @@ loadBrokerAssets();$('generate').addEventListener('click',async()=>{const btn=$(
       if(!r.ok||!d?.verified||!Array.isArray(d.bars)||!d.bars.length)throw new Error(d?.feed_status||"Waiting for verified live candles");
       const key=asset+"|"+tf;
       if(key!==lastKey){lastKey=key;history=[];}
-      const series=buildSeries(d.bars);draw(series);
+      const bars=d.bars;const newest=bars[bars.length-1];latestBarTime=Number(newest.time??newest.timestamp);if(!Number.isFinite(latestBarTime))latestBarTime=null;latestTf=tf;const series=buildSeries(bars);draw(series);await refreshAnalysis(asset,tf);updateCandleCountdown();
       const status=$("diLineStatus");
       if(status){status.textContent="VERIFIED LIVE · "+asset+" · "+(tf<60?tf+"s":tf%60===0?(tf/60)+"m":tf+"s")+" · "+d.bars.length+" candles";status.style.color="#22ed86";}
     }catch(e){const status=$("diLineStatus");if(status){status.textContent="DI CHART WAITING · "+String(e.message||e).slice(0,110);status.style.color="#ffca62";}}
