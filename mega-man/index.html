@@ -432,7 +432,7 @@ loadBrokerAssets();$('generate').addEventListener('click',async()=>{const btn=$(
       if(!r.ok||!d?.verified||!Array.isArray(d.bars)||!d.bars.length)throw new Error(d?.feed_status||"Waiting for verified live candles");
       const key=asset+"|"+tf;
       if(key!==lastKey){lastKey=key;history=[];}
-      const bars=d.bars;const newest=bars[bars.length-1];latestBarTime=Number(newest.time??newest.timestamp);if(!Number.isFinite(latestBarTime))latestBarTime=null;latestTf=tf;const series=buildSeries(bars);draw(series);await refreshAnalysis(asset,tf);updateCandleCountdown();
+      const bars=d.bars;const newest=bars[bars.length-1];latestBarTime=Number(newest.time??newest.timestamp);if(!Number.isFinite(latestBarTime))latestBarTime=null;latestTf=tf;const series=buildSeries(bars);draw(series);updateCandleCountdown();
       const status=$("diLineStatus");
       if(status){status.textContent="VERIFIED LIVE · "+asset+" · "+(tf<60?tf+"s":tf%60===0?(tf/60)+"m":tf+"s")+" · "+d.bars.length+" candles";status.style.color="#22ed86";}
     }catch(e){const status=$("diLineStatus");if(status){status.textContent="DI CHART WAITING · "+String(e.message||e).slice(0,110);status.style.color="#ffca62";}}
