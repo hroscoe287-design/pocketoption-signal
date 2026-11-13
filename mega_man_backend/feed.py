@@ -487,7 +487,7 @@ class PocketOptionFeed:
                         # A 2s caller wait discarded successful responses and made
                         # the endpoint report an empty feed while the request was still running.
                         with self.history_request_lock:
-                            result["raw"]=client.get_historical_candles(actual,tf,offset=180,count_request=1)
+                            result["raw"]=client.get_historical_candles(actual,tf,offset=9000,count_request=1)
                     except Exception as e:result["error"]=type(e).__name__
                     finally:
                         with self.lock:
