@@ -42,7 +42,7 @@ def broker_asset(value: str) -> str:
         "EURUSD": "EURUSD", "GBPUSD": "GBPUSD", "USDJPY": "USDJPY",
         "AUDUSD": "AUDUSD", "BTCUSD": "BTCUSD", "ETHUSD": "ETHUSD",
     }
-    return aliases.get(upper, raw.replace("/", "").replace(" ", ""))
+    return aliases.get(upper, raw)  # Preserve display labels so the broker catalog can resolve them to real symbols.
 
 def market_snapshot(asset: str, tf: int):
     if tf not in TIMEFRAMES:
