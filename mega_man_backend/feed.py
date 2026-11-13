@@ -480,11 +480,14 @@ class PocketOptionFeed:
                 def load_history():
                     result={"raw":None,"error":None}
                     try:
+                        # Request only the recent 180 bars needed by the signal engine/UI.
+                        # A 9000-bar request is excessive for every symbol/timeframe and can
+                        # cause Pocket Option to time out before returning any usable history.
                         # The upstream library waits up to 10s per history request.
                         # A 2s caller wait discarded successful responses and made
                         # the endpoint report an empty feed while the request was still running.
                         with self.history_request_lock:
-                            result["raw"]=client.get_historical_candles(actual,tf,offset=9000,count_request=1)
+                            result["raw"]=client.get_historical_candles(actual,tf,offset=180,count_request=1)
                     except Exception as e:result["error"]=type(e).__name__
                     finally:
                         with self.lock:
