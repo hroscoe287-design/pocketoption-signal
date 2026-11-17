@@ -4,7 +4,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "mega_man_backend"))
-from engine import analyze
+from engine import analyze, detect_fractal
 
 
 def candles(mode, count=100):
@@ -27,6 +27,16 @@ def candles(mode, count=100):
 
 
 class AlligatorTests(unittest.TestCase):
+    def test_period_two_fractal_uses_two_closed_bars_each_side(self):
+        upper, lower = detect_fractal([1, 2, 9, 3, 2], [9, 8, 1, 7, 8], period=2)
+        self.assertTrue(upper)
+        self.assertTrue(lower)
+
+    def test_user_arrow_direction_mapping_is_explicit(self):
+        # Upper/UP arrow maps to SELL (-1); lower/DOWN arrow maps to BUY (+1).
+        upper, lower = detect_fractal([1, 2, 9, 3, 2], [9, 8, 1, 7, 8], period=2)
+        self.assertEqual(-1 if upper else 1 if lower else 0, -1)
+
     def test_flat_market_is_identified_as_tight(self):
         result=analyze(candles("flat"), timeframe_seconds=5)
         self.assertTrue(result["ready"])
@@ -43,6 +53,7 @@ class AlligatorTests(unittest.TestCase):
         self.assertTrue(abs(comp["alligator_expansion_rate"])<1e6)
         self.assertIn(comp["alligator_direction"],("BUY","SELL","MIXED"))
         self.assertIn("alligator_score_adjustment",comp)
+        self.assertEqual(comp["fractal_period"],2)
 
     def test_alligator_state_is_in_pattern_explanation(self):
         result=analyze(candles("rising"), timeframe_seconds=15)
