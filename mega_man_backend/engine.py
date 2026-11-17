@@ -24,6 +24,19 @@ def rsi(values,period=14):
     return 100-100/(1+ag/al)
 
 
+def detect_fractal(high, low, period=2):
+    """Return (upper-pivot, lower-pivot) after `period` closed right-side bars."""
+    width=2*period+1
+    if period < 1 or len(high) < width or len(low) < width:
+        return False, False
+    pivot=len(high)-period-1
+    left_h=high[pivot-period:pivot]; right_h=high[pivot+1:pivot+period+1]
+    left_l=low[pivot-period:pivot]; right_l=low[pivot+1:pivot+period+1]
+    upper=high[pivot] > max(left_h+right_h)
+    lower=low[pivot] < min(left_l+right_l)
+    return upper, lower
+
+
 def analyze(candles,min_score=55,timeframe_seconds=5):
     if len(candles)<60:
         return {"direction":"WAIT","score":0,"ready":False,"eligible":False,"reason":"Need 60 verified candles for stable indicator context","components":{}}
@@ -98,9 +111,8 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     esa=ema(typical,10);dev=ema([abs(v-e) for v,e in zip(typical,esa)],10)
     ci=[(typical[i]-esa[i])/(.015*dev[i]) if dev[i]>1e-12 else 0 for i in range(len(typical))]
     wt1=ema(ci,21);wt2=sma(wt1,4)
-    # Period-3 fractal: three bars on either side; only the most recent confirmed fractal is used.
-    fh=any(high[-4] > max(high[-7:-4]+high[-3:]) for _ in [0]) if len(high)>=7 else False
-    fl=any(low[-4] < min(low[-7:-4]+low[-3:]) for _ in [0]) if len(low)>=7 else False
+    # Period-2 fractal: two closed bars on each side; only confirmed pivots count.
+    fh,fl=detect_fractal(high,low,period=2)
     votes={
       "ema_9_21": 1 if e9[-1]>e21[-1] else -1 if e9[-1]<e21[-1] else 0,
       "di_spread":1 if di_spread>0 else -1 if di_spread<0 else 0,
@@ -117,9 +129,8 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     # ADX confirms trend quality; it never chooses direction by itself.
     if adx<15:score=max(0,score-10)
     elif adx>=20:score=min(100,score+5)
-    # Confirmed Fractal-3 pivots: a low-pivot/down arrow is bullish (BUY)
-    # and a high-pivot/up arrow is bearish (SELL), per the user's chart convention.
-    # The pivot at -4 has three completed candles on its right.
+    # User's arrow convention: DOWN/lower pivot = BUY; UP/upper pivot = SELL.
+    # Period 2 requires two completed candles to the right of the pivot.
     fractal_direction=1 if fl else -1 if fh else 0
     # Entry requires a recent actual DI crossover. The confirmed period-3
     # fractal is only knowable after three right-side candles, so requiring
@@ -192,30 +203,27 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     # Secondary trend context contributes at most 15 points.
     context_weights={"ema_9_21":4,"macd":4,"rsi":3,"wavetrend":2}
     score+=sum(w for k,w in context_weights.items() if votes[k]==di_direction and di_direction)
-    # Alligator is a dynamic market-state input: tight lines warn of chop,
-    # expanding aligned lines reward developing momentum, and contraction
-    # warns that an otherwise valid move may be losing force.
+    # Alligator is a score modifier, never a replacement for the user's
+    # fractal + DI direction. Agreement boosts the setup; disagreement reduces it.
     alligator_bonus=0
     if di_direction and alligator_tight:
         alligator_bonus=-5
     elif di_direction and alligator_direction==di_direction:
         if alligator_gap_atr>=0.8 and alligator_expanding:
-            alligator_bonus=8
+            alligator_bonus=10
         elif alligator_gap_atr>=0.35:
-            alligator_bonus=4
+            alligator_bonus=6
         if alligator_contracting:
             alligator_bonus=-4
     elif di_direction and alligator_direction==-di_direction:
         alligator_bonus=-4
     score+=alligator_bonus
     # Highest-priority pattern: confirmed user's directional fractal + a wide,
-    # expanding DI X + the matching DI crossover. Award the maximum setup-strength
-    # score in either direction; existing fakeout/ADX eligibility gates still apply.
+    # expanding DI X. Do not require a fresh crossover: an established, still-wide
+    # DI direction remains valid after the cross. Fakeout/ADX gates still apply.
     fractal_wide_x_priority=bool(
         fractal_di_aligned
         and (bearish_di_expansion or bullish_di_expansion)
-        and di_cross_confirmed
-        and di_cross_direction==di_direction
     )
     if fractal_wide_x_priority:
         score=100
@@ -272,5 +280,5 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
       "bearish_di_expansion":bearish_di_expansion,"bullish_di_expansion":bullish_di_expansion,
       "macd_fading":macd_fading,"di_forecast":di_projection,
       "bullish_di_rollover_block":bullish_di_rollover_block,"timeframe_seconds":timeframe_seconds,
-      "early_cross":early_cross,"fractal_high_confirmed":fh,
+      "early_cross":early_cross,"fractal_period":2,"fractal_high_confirmed":fh,
       "fractal_low_confirmed":fl,"fractal_direction":"BUY" if fractal_direction==1 else "SELL" if fractal_direction==-1 else "WAIT", "di_cross_direction":"BUY" if di_cross_direction==1 else "SELL" if di_cross_direction==-1 else "WAIT", "di_cross_confirmed":di_cross_confirmed, "fractal_di_aligned":fractal_di_aligned, "fractal_wide_x_priority":fractal_wide_x_priority, "di_gap_valid":di_gap_valid, "minimum_di_gap":round(min_di_gap,3), "fakeout_risk":fakeout,"votes":votes}}
