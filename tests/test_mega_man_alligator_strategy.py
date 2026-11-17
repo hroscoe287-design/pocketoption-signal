@@ -16,10 +16,10 @@ class AlligatorStrategyTests(unittest.TestCase):
         jaw = shifted_smma(values, 13, 8)
         teeth = shifted_smma(values, 8, 5)
         lips = shifted_smma(values, 5, 3)
-        self.assertIsNone(jaw[7])
-        self.assertAlmostEqual(jaw[8], sum(values[:13]) / 13)
-        self.assertAlmostEqual(teeth[5], sum(values[:8]) / 8)
-        self.assertAlmostEqual(lips[3], sum(values[:5]) / 5)
+        self.assertIsNone(jaw[19])
+        self.assertAlmostEqual(jaw[20], sum(values[:13]) / 13)
+        self.assertAlmostEqual(teeth[12], sum(values[:8]) / 8)
+        self.assertAlmostEqual(lips[7], sum(values[:5]) / 5)
         self.assertAlmostEqual(smma(values, 5)[5], (3.0 * 4 + 6.0) / 5)
 
     def test_fractal_period_three_confirmed_only_after_three_right_bars(self):
