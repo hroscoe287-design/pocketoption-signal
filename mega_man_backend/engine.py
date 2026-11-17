@@ -15,6 +15,30 @@ def sma(values,period):
     return [sum(values[max(0,i-period+1):i+1])/len(values[max(0,i-period+1):i+1]) for i in range(len(values))]
 
 
+def smma(values, period):
+    """Williams-style smoothed moving average, seeded with the first-period SMA."""
+    if period < 1 or len(values) < period:
+        return []
+    first = sum(float(v) for v in values[:period]) / period
+    out = [None] * (period - 1) + [first]
+    current = first
+    for value in values[period:]:
+        current = (current * (period - 1) + float(value)) / period
+        out.append(current)
+    return out
+
+
+def shifted_smma(values, period, shift):
+    """Alligator line plotted forward: chart slot uses the value from shift bars earlier."""
+    raw = smma(values, period)
+    if not raw:
+        return [None] * len(values)
+    out = [None] * len(values)
+    for i in range(shift, len(values)):
+        out[i] = raw[i - shift]
+    return out
+
+
 def rsi(values,period=14):
     if len(values)<=period:return None
     changes=[float(b)-float(a) for a,b in zip(values[:-1],values[1:])]
@@ -92,17 +116,20 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     volatility_pct=(atr14/close[-1])*100 if close[-1] else 0.0
     candle_range=max(0.0,high[-1]-low[-1]); candle_body=abs(close[-1]-float(candles[-1]["open"]))
     body_ratio=candle_body/candle_range if candle_range else 0.0
-    # Williams Alligator-inspired smoothed median lines (unshifted for causal confirmation).
+    # Classic Williams Alligator: SMMA of median price, standard forward plot shifts.
+    # Jaw 13/8, Teeth 8/5, Lips 5/3. Each current chart slot reads the
+    # smoothed value calculated shift bars earlier, matching the plotted indicator.
     median=[(h+l)/2 for h,l in zip(high,low)]
-    jaw_series=sma(median,13);teeth_series=sma(median,8);lips_series=sma(median,5)
+    jaw_series=shifted_smma(median,13,8)
+    teeth_series=shifted_smma(median,8,5)
+    lips_series=shifted_smma(median,5,3)
     jaw,teeth,lips=jaw_series[-1],teeth_series[-1],lips_series[-1]
-    alligator_spread_series=[l-t for l,t in zip(lips_series,jaw_series)]
-    alligator_gap=abs(alligator_spread_series[-1])
+    alligator_gap=abs(lips-jaw)
     alligator_gap_atr=alligator_gap/atr14 if atr14>1e-12 else 0.0
     alligator_direction=1 if lips>teeth>jaw else -1 if lips<teeth<jaw else 0
-    # Average change in Jaw-to-Lips separation over the last three candles,
-    # normalized by ATR so the same thresholds work across assets/timeframes.
-    alligator_expansion_rate=(abs(alligator_spread_series[-1])-abs(alligator_spread_series[-4]))/(3*atr14) if len(alligator_spread_series)>=4 and atr14>1e-12 else 0.0
+    # Expansion is the change in plotted Lips-to-Jaw separation over 3 bars.
+    jaw_lips_gap_series=[abs(l-j) if l is not None and j is not None else 0.0 for l,j in zip(lips_series,jaw_series)]
+    alligator_expansion_rate=(jaw_lips_gap_series[-1]-jaw_lips_gap_series[-4])/(3*atr14) if len(jaw_lips_gap_series)>=4 and atr14>1e-12 else 0.0
     alligator_expanding=bool(alligator_direction and alligator_expansion_rate>0.03)
     alligator_contracting=bool(alligator_gap_atr>0 and alligator_expansion_rate < -0.03)
     alligator_tight=bool(alligator_gap_atr<0.35)
@@ -130,8 +157,8 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     if adx<15:score=max(0,score-10)
     elif adx>=20:score=min(100,score+5)
     # User's arrow convention: DOWN/lower pivot = BUY; UP/upper pivot = SELL.
-    # Period 3 requires three completed candles to the right of the pivot.
-    fractal_direction=1 if fl else -1 if fh else 0
+    # If one window qualifies as both upper and lower, treat it as ambiguous.
+    fractal_direction=1 if fl and not fh else -1 if fh and not fl else 0
     # Entry requires a recent actual DI crossover. The confirmed period-3
     # fractal is only knowable after three right-side candles, so requiring
     # the DI cross on the exact same update misses otherwise aligned setups.
@@ -269,6 +296,10 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
       "alligator_jaw":round(jaw,6),"alligator_teeth":round(teeth,6),"alligator_lips":round(lips,6),
       "alligator_direction":"BUY" if alligator_direction==1 else "SELL" if alligator_direction==-1 else "MIXED",
       "alligator_gap":round(alligator_gap,8),"alligator_gap_atr":round(alligator_gap_atr,3),
+      "alligator_jaw_period":13,"alligator_jaw_shift":8,
+      "alligator_teeth_period":8,"alligator_teeth_shift":5,
+      "alligator_lips_period":5,"alligator_lips_shift":3,
+      "alligator_method":"SMMA median price (H+L)/2",
       "alligator_expansion_rate":round(alligator_expansion_rate,4),
       "alligator_expanding":alligator_expanding,"alligator_contracting":alligator_contracting,
       "alligator_tight":alligator_tight,"alligator_score_adjustment":alligator_bonus,
