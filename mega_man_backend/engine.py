@@ -24,7 +24,7 @@ def rsi(values,period=14):
     return 100-100/(1+ag/al)
 
 
-def detect_fractal(high, low, period=2):
+def detect_fractal(high, low, period=3):
     """Return (upper-pivot, lower-pivot) after `period` closed right-side bars."""
     width=2*period+1
     if period < 1 or len(high) < width or len(low) < width:
@@ -111,8 +111,8 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     esa=ema(typical,10);dev=ema([abs(v-e) for v,e in zip(typical,esa)],10)
     ci=[(typical[i]-esa[i])/(.015*dev[i]) if dev[i]>1e-12 else 0 for i in range(len(typical))]
     wt1=ema(ci,21);wt2=sma(wt1,4)
-    # Period-2 fractal: two closed bars on each side; only confirmed pivots count.
-    fh,fl=detect_fractal(high,low,period=2)
+    # Period-3 fractal: three closed bars on each side; retain this setting for a proper baseline test.
+    fh,fl=detect_fractal(high,low,period=3)
     votes={
       "ema_9_21": 1 if e9[-1]>e21[-1] else -1 if e9[-1]<e21[-1] else 0,
       "di_spread":1 if di_spread>0 else -1 if di_spread<0 else 0,
@@ -130,7 +130,7 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     if adx<15:score=max(0,score-10)
     elif adx>=20:score=min(100,score+5)
     # User's arrow convention: DOWN/lower pivot = BUY; UP/upper pivot = SELL.
-    # Period 2 requires two completed candles to the right of the pivot.
+    # Period 3 requires three completed candles to the right of the pivot.
     fractal_direction=1 if fl else -1 if fh else 0
     # Entry requires a recent actual DI crossover. The confirmed period-3
     # fractal is only knowable after three right-side candles, so requiring
@@ -280,5 +280,5 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
       "bearish_di_expansion":bearish_di_expansion,"bullish_di_expansion":bullish_di_expansion,
       "macd_fading":macd_fading,"di_forecast":di_projection,
       "bullish_di_rollover_block":bullish_di_rollover_block,"timeframe_seconds":timeframe_seconds,
-      "early_cross":early_cross,"fractal_period":2,"fractal_high_confirmed":fh,
+      "early_cross":early_cross,"fractal_period":3,"fractal_high_confirmed":fh,
       "fractal_low_confirmed":fl,"fractal_direction":"BUY" if fractal_direction==1 else "SELL" if fractal_direction==-1 else "WAIT", "di_cross_direction":"BUY" if di_cross_direction==1 else "SELL" if di_cross_direction==-1 else "WAIT", "di_cross_confirmed":di_cross_confirmed, "fractal_di_aligned":fractal_di_aligned, "fractal_wide_x_priority":fractal_wide_x_priority, "di_gap_valid":di_gap_valid, "minimum_di_gap":round(min_di_gap,3), "fakeout_risk":fakeout,"votes":votes}}
