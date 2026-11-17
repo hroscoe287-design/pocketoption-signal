@@ -81,7 +81,18 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     body_ratio=candle_body/candle_range if candle_range else 0.0
     # Williams Alligator-inspired smoothed median lines (unshifted for causal confirmation).
     median=[(h+l)/2 for h,l in zip(high,low)]
-    jaw=sma(median,13)[-1];teeth=sma(median,8)[-1];lips=sma(median,5)[-1]
+    jaw_series=sma(median,13);teeth_series=sma(median,8);lips_series=sma(median,5)
+    jaw,teeth,lips=jaw_series[-1],teeth_series[-1],lips_series[-1]
+    alligator_spread_series=[l-t for l,t in zip(lips_series,jaw_series)]
+    alligator_gap=abs(alligator_spread_series[-1])
+    alligator_gap_atr=alligator_gap/atr14 if atr14>1e-12 else 0.0
+    alligator_direction=1 if lips>teeth>jaw else -1 if lips<teeth<jaw else 0
+    # Average change in Jaw-to-Lips separation over the last three candles,
+    # normalized by ATR so the same thresholds work across assets/timeframes.
+    alligator_expansion_rate=(abs(alligator_spread_series[-1])-abs(alligator_spread_series[-4]))/(3*atr14) if len(alligator_spread_series)>=4 and atr14>1e-12 else 0.0
+    alligator_expanding=bool(alligator_direction and alligator_expansion_rate>0.03)
+    alligator_contracting=bool(alligator_gap_atr>0 and alligator_expansion_rate < -0.03)
+    alligator_tight=bool(alligator_gap_atr<0.35)
     # WaveTrend-style oscillator.
     typical=[(h+l+c)/3 for h,l,c in zip(high,low,close)]
     esa=ema(typical,10);dev=ema([abs(v-e) for v,e in zip(typical,esa)],10)
@@ -179,8 +190,24 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     elif adx>=15: score+=9
     elif adx>=8: score+=5
     # Secondary trend context contributes at most 15 points.
-    context_weights={"ema_9_21":4,"macd":4,"rsi":3,"wavetrend":2,"alligator":2}
+    context_weights={"ema_9_21":4,"macd":4,"rsi":3,"wavetrend":2}
     score+=sum(w for k,w in context_weights.items() if votes[k]==di_direction and di_direction)
+    # Alligator is a dynamic market-state input: tight lines warn of chop,
+    # expanding aligned lines reward developing momentum, and contraction
+    # warns that an otherwise valid move may be losing force.
+    alligator_bonus=0
+    if di_direction and alligator_tight:
+        alligator_bonus=-5
+    elif di_direction and alligator_direction==di_direction:
+        if alligator_gap_atr>=0.8 and alligator_expanding:
+            alligator_bonus=8
+        elif alligator_gap_atr>=0.35:
+            alligator_bonus=4
+        if alligator_contracting:
+            alligator_bonus=-4
+    elif di_direction and alligator_direction==-di_direction:
+        alligator_bonus=-4
+    score+=alligator_bonus
     # Highest-priority pattern: confirmed user's directional fractal + a wide,
     # expanding DI X + the matching DI crossover. Award the maximum setup-strength
     # score in either direction; existing fakeout/ADX eligibility gates still apply.
@@ -218,7 +245,7 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     early_cross=(prev_spread<=0<di_spread) if direction==1 else ((prev_spread>=0>di_spread) if direction==-1 else False)
     market_context=f"Verified candles: {len(candles)}; EMA trend {'bullish' if e9[-1]>e21[-1] else 'bearish' if e9[-1]<e21[-1] else 'flat'}"
     volatility_context=f"ATR14 {atr14:.6g} ({volatility_pct:.4f}% of price); latest candle body/range {body_ratio:.2f}"
-    pattern_context=f"DI spread {di_spread:.2f}, velocity {di_velocity:.2f}; MACD {'positive' if hist>0 else 'negative' if hist<0 else 'flat'}; fractal confirmation {'yes' if fractal_direction==direction and direction else 'no'}"
+    pattern_context=f"DI spread {di_spread:.2f}, velocity {di_velocity:.2f}; Alligator {'expanding' if alligator_expanding else 'contracting' if alligator_contracting else 'tight' if alligator_tight else 'aligned' if alligator_direction else 'mixed'} (gap {alligator_gap_atr:.2f} ATR); MACD {'positive' if hist>0 else 'negative' if hist<0 else 'flat'}; fractal confirmation {'yes' if fractal_direction==direction and direction else 'no'}"
     final_context=f"{'BUY/CALL' if direction==1 else 'SELL/PUT' if direction==-1 else 'WAIT'}; score {score}/100; {'eligible for signal' if eligible else reason}"
     di_projection=forecast_di(dip_series,dim_series,timeframe_seconds)
     return {"direction":"BUY/CALL" if direction==1 else "SELL/PUT" if direction==-1 else "WAIT",
@@ -232,6 +259,11 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
       "components":{"atr14":round(atr14,8),"volatility_pct":round(volatility_pct,5),"latest_candle_body_ratio":round(body_ratio,3),"ema9":round(e9[-1],6),"ema21":round(e21[-1],6),"rsi14":round(rv,2) if rv is not None else None,
       "macd_histogram":round(hist,7),"wave_trend_1":round(wt1[-1],3),"wave_trend_2":round(wt2[-1],3),
       "alligator_jaw":round(jaw,6),"alligator_teeth":round(teeth,6),"alligator_lips":round(lips,6),
+      "alligator_direction":"BUY" if alligator_direction==1 else "SELL" if alligator_direction==-1 else "MIXED",
+      "alligator_gap":round(alligator_gap,8),"alligator_gap_atr":round(alligator_gap_atr,3),
+      "alligator_expansion_rate":round(alligator_expansion_rate,4),
+      "alligator_expanding":alligator_expanding,"alligator_contracting":alligator_contracting,
+      "alligator_tight":alligator_tight,"alligator_score_adjustment":alligator_bonus,
       "plus_di_7":round(dip,3),"minus_di_7":round(dim,3),"plus_di_14":round(dip14,3),"minus_di_14":round(dim14,3),
       "adx_14":round(adx,3),"di_spread":round(di_spread,3),"spread_velocity":round(di_velocity,3),
       "spread_acceleration":round(di_accel,3),"di_plus_delta":round(di_plus_delta,3),
