@@ -123,7 +123,7 @@ function classifyAsset(raw){
  const s=String(raw).toUpperCase().replace(/[\s./-]/g,'').replace(/_OTC$/,'').replace(/OTC$/,'');
  const otc=/OTC/i.test(String(raw));
  const currencies=new Set(['USD','EUR','GBP','JPY','CHF','CAD','AUD','NZD','CNY','HKD','SGD','TRY','ZAR','MXN','NOK','SEK','PLN','THB','INR','BRL','DKK','ILS','KRW','AED','SAR']);
- if(/\\b(BTC|ETH|LTC|XRP|DOGE|ADA|SOL|DOT|BNB|TRX|AVAX|LINK|BCH|ETC|XLM|TON|SHIB|CRYPTO|BITCOIN|ETHEREUM)\\b/i.test(String(raw)) || /^(BTC|ETH|LTC|XRP|DOGE|ADA|SOL|DOT|BNB|TRX|AVAX|LINK|BCH|ETC|XLM|TON|SHIB)(USD|USDT|EUR)?$/.test(s)) return 'Crypto';
+ if(/\b(BTC|ETH|LTC|XRP|DOGE|ADA|SOL|DOT|BNB|TRX|AVAX|LINK|BCH|ETC|XLM|TON|SHIB|CRYPTO|BITCOIN|ETHEREUM)\b/i.test(String(raw)) || /^(BTC|ETH|LTC|XRP|DOGE|ADA|SOL|DOT|BNB|TRX|AVAX|LINK|BCH|ETC|XLM|TON|SHIB)(USD|USDT|EUR)?$/.test(s)) return 'Crypto';
  if(/GOLD|SILVER|XAU|XAG|OIL|BRENT|WTI|PLATINUM|PALLADIUM|COPPER|NATURALGAS|NGAS/i.test(String(raw))) return 'Commodities';
  if(/INDEX|INDICES|US30|DJI|NAS100|NASDAQ|SPX|S&P|US500|DAX|GER40|FTSE|UK100|CAC|FRA40|NIKKEI|JP225|HK50|AUS200|EU50|STOXX|RUSSELL|VIX/i.test(String(raw))) return 'Indices';
  const pair=s.replace(/[^A-Z]/g,'');
