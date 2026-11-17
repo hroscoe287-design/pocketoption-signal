@@ -190,7 +190,7 @@ loadBrokerAssets();$('generate').addEventListener('click',async()=>{const btn=$(
     if (!asset) return;
     busy = true;
     try {
-      const base = window.MEGA_MAN_API_BASE || "https://mega-man-signal-api.onrender.com";
+      const base = window.MEGA_MAN_API_BASE || "https://mega-man-alligator-test.onrender.com";
       const r = await fetch(base.replace(/\/$/, "") + "/api/analyze", {
         method: "POST", cache: "no-store",
         headers: {"Content-Type":"application/json"},
@@ -255,7 +255,7 @@ loadBrokerAssets();$('generate').addEventListener('click',async()=>{const btn=$(
 <script id="mega-man-live-candle-chart">
 (() => {
   const $=id=>document.getElementById(id); let busy=false, timer=null, latestBarTime=null, latestTf=5, latestAnalysis=null, countdownTimer=null, history=[];
-  const apiBase=()=> (window.MEGA_MAN_API_BASE||"https://mega-man-signal-api.onrender.com").replace(/\/$/,"");
+  const apiBase=()=> (window.MEGA_MAN_API_BASE||"https://mega-man-alligator-test.onrender.com").replace(/\/$/,"");
   function draw(bars) {
     const canvas=$("marketCandles"); if(!canvas||!Array.isArray(bars)||!bars.length)return;
     const ratio=window.devicePixelRatio||1, width=Math.max(300,canvas.clientWidth||600), height=210;
@@ -338,7 +338,7 @@ loadBrokerAssets();$('generate').addEventListener('click',async()=>{const btn=$(
     if(busy||document.visibilityState==="hidden")return;
     const asset=$("asset")?.value,tf=Number($("tf")?.value||5);if(!asset)return;busy=true;
     try{
-      const base=window.MEGA_MAN_API_BASE||"https://mega-man-signal-api.onrender.com";
+      const base=window.MEGA_MAN_API_BASE||"https://mega-man-alligator-test.onrender.com";
       const r=await fetch(base.replace(/\/$/,"")+"/api/market?asset="+encodeURIComponent(asset)+"&tf="+tf,{cache:"no-store"});
       const d=await r.json();if(!r.ok||!d.verified||!Array.isArray(d.bars)||!d.bars.length)throw new Error(d.feed_status||"No verified candles");
       const newest=d.bars[d.bars.length-1];latestBarTime=Number(newest.time??newest.timestamp);if(!Number.isFinite(latestBarTime))latestBarTime=null;latestTf=tf;
@@ -357,7 +357,7 @@ loadBrokerAssets();$('generate').addEventListener('click',async()=>{const btn=$(
 (() => {
   const $ = id => document.getElementById(id);
   let busy = false, timer = null, history = [], lastKey = "", latestBarTime = null, latestTf = 5, latestAnalysis = null, countdownTimer = null;
-  const apiBase = () => (window.MEGA_MAN_API_BASE || "https://mega-man-signal-api.onrender.com").replace(/\/$/, "");
+  const apiBase = () => (window.MEGA_MAN_API_BASE || "https://mega-man-alligator-test.onrender.com").replace(/\/$/, "");
   function mount() {
     if ($("diLineChart")) return;
     const right = document.querySelector(".rightcol");
