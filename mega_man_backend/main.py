@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 from feed import feed
 from engine import analyze
 
-FRONTEND = os.getenv("FRONTEND_URL", "https://mega-man-signal-lab.onrender.com").rstrip("/")
+FRONTEND = os.getenv("FRONTEND_URL", "https://mega-man-alligator-lab.onrender.com").rstrip("/")
 DEFAULT_ASSET = os.getenv("PO_DEFAULT_ASSET", "EURUSD_otc")
 DEFAULT_TF = int(os.getenv("PO_DEFAULT_TIMEFRAME_SECONDS", "5"))
 TIMEFRAMES = {5, 15, 30, 60, 300, 900, 3600}
