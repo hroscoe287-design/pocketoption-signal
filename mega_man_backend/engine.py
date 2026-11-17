@@ -196,15 +196,15 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     # expanding aligned lines reward developing momentum, and contraction
     # warns that an otherwise valid move may be losing force.
     alligator_bonus=0
-    if di_direction and alligator_direction==di_direction:
+    if di_direction and alligator_tight:
+        alligator_bonus=-5
+    elif di_direction and alligator_direction==di_direction:
         if alligator_gap_atr>=0.8 and alligator_expanding:
             alligator_bonus=8
         elif alligator_gap_atr>=0.35:
             alligator_bonus=4
-        elif alligator_tight:
-            alligator_bonus=-3
         if alligator_contracting:
-            alligator_bonus=min(alligator_bonus,-4)
+            alligator_bonus=-4
     elif di_direction and alligator_direction==-di_direction:
         alligator_bonus=-4
     score+=alligator_bonus
