@@ -4,7 +4,8 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "mega_man_backend"))
-from engine import analyze, detect_fractal
+from engine import (analyze, detect_fractal, smma, shifted_smma,
+                    fractal_signal_direction, alligator_score_adjustment)
 
 
 def candles(mode, count=100):
@@ -59,6 +60,39 @@ class AlligatorTests(unittest.TestCase):
         result=analyze(candles("rising"), timeframe_seconds=15)
         pattern=next(stage for stage in result["stages"] if stage["name"]=="Pattern Matching")
         self.assertIn("Alligator",pattern["summary"])
+
+    def test_classic_williams_alligator_smma_and_forward_shifts(self):
+        values = [float(x) for x in range(1, 31)]
+        jaw = shifted_smma(values, 13, 8)
+        teeth = shifted_smma(values, 8, 5)
+        lips = shifted_smma(values, 5, 3)
+        self.assertIsNone(jaw[7])
+        self.assertAlmostEqual(jaw[8], sum(values[:13]) / 13)
+        self.assertAlmostEqual(teeth[5], sum(values[:8]) / 8)
+        self.assertAlmostEqual(lips[3], sum(values[:5]) / 5)
+        expected = ((sum(values[:5]) / 5) * 4 + values[5]) / 5
+        self.assertAlmostEqual(smma(values, 5)[5], expected)
+
+    def test_user_fractal_arrow_mapping(self):
+        self.assertEqual(fractal_signal_direction(upper=True, lower=False), -1)
+        self.assertEqual(fractal_signal_direction(upper=False, lower=True), 1)
+        self.assertEqual(fractal_signal_direction(upper=False, lower=False), 0)
+        self.assertEqual(fractal_signal_direction(upper=True, lower=True), 0)
+
+    def test_alligator_only_modifies_score(self):
+        self.assertEqual(alligator_score_adjustment(1, 1, False, 0.9, True, False), 10)
+        self.assertEqual(alligator_score_adjustment(-1, -1, False, 0.5, False, False), 6)
+        self.assertEqual(alligator_score_adjustment(1, -1, False, 0.5, False, False), -4)
+        self.assertEqual(alligator_score_adjustment(1, 1, True, 1.2, True, False), -5)
+        self.assertEqual(alligator_score_adjustment(0, 1, False, 1.2, True, False), 0)
+
+    def test_analyze_reports_canonical_alligator_parameters(self):
+        result = analyze(candles("rising"), timeframe_seconds=15)
+        comp = result["components"]
+        self.assertEqual((comp["alligator_jaw_period"], comp["alligator_jaw_shift"]), (13, 8))
+        self.assertEqual((comp["alligator_teeth_period"], comp["alligator_teeth_shift"]), (8, 5))
+        self.assertEqual((comp["alligator_lips_period"], comp["alligator_lips_shift"]), (5, 3))
+        self.assertEqual(comp["alligator_method"], "SMMA median price (H+L)/2")
 
 if __name__=="__main__":
     unittest.main()
