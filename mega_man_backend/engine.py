@@ -15,6 +15,30 @@ def sma(values,period):
     return [sum(values[max(0,i-period+1):i+1])/len(values[max(0,i-period+1):i+1]) for i in range(len(values))]
 
 
+def smma(values, period):
+    """Williams-style smoothed moving average, seeded with the first-period SMA."""
+    if period < 1 or len(values) < period:
+        return []
+    first = sum(float(v) for v in values[:period]) / period
+    out = [None] * (period - 1) + [first]
+    current = first
+    for value in values[period:]:
+        current = (current * (period - 1) + float(value)) / period
+        out.append(current)
+    return out
+
+
+def shifted_smma(values, period, shift):
+    """Alligator line plotted forward: chart slot uses the value from shift bars earlier."""
+    raw = smma(values, period)
+    if not raw:
+        return [None] * len(values)
+    out = [None] * len(values)
+    for i in range(shift, len(values)):
+        out[i] = raw[i - shift]
+    return out
+
+
 def rsi(values,period=14):
     if len(values)<=period:return None
     changes=[float(b)-float(a) for a,b in zip(values[:-1],values[1:])]
@@ -22,6 +46,38 @@ def rsi(values,period=14):
     ag=sum(gains[-period:])/period;al=sum(losses[-period:])/period
     if al==0:return 100.0 if ag else 50.0
     return 100-100/(1+ag/al)
+
+
+def detect_fractal(high, low, period=3):
+    """Return (upper-pivot, lower-pivot) after period closed right-side bars."""
+    width=2*period+1
+    if period < 1 or len(high) < width or len(low) < width:
+        return False, False
+    pivot=len(high)-period-1
+    left_h=high[pivot-period:pivot]; right_h=high[pivot+1:pivot+period+1]
+    left_l=low[pivot-period:pivot]; right_l=low[pivot+1:pivot+period+1]
+    return high[pivot] > max(left_h+right_h), low[pivot] < min(left_l+right_l)
+
+
+def fractal_signal_direction(upper, lower):
+    """User convention: upper/UP arrow is SELL; lower/DOWN arrow is BUY."""
+    if upper and lower:
+        return 0
+    return 1 if lower else -1 if upper else 0
+
+
+def alligator_score_adjustment(di_direction, alligator_direction, tight, gap_atr, expanding, contracting):
+    """Alligator modifies confluence only; it never creates or reverses direction."""
+    if not di_direction:
+        return 0
+    if tight:
+        return -5
+    if alligator_direction == di_direction:
+        bonus = 10 if gap_atr >= 0.8 and expanding else 6 if gap_atr >= 0.35 else 0
+        return -4 if contracting else bonus
+    if alligator_direction == -di_direction:
+        return -4
+    return 0
 
 
 def analyze(candles,min_score=55,timeframe_seconds=5):
@@ -79,17 +135,19 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     volatility_pct=(atr14/close[-1])*100 if close[-1] else 0.0
     candle_range=max(0.0,high[-1]-low[-1]); candle_body=abs(close[-1]-float(candles[-1]["open"]))
     body_ratio=candle_body/candle_range if candle_range else 0.0
-    # Williams Alligator-inspired smoothed median lines (unshifted for causal confirmation).
+    # Classic Williams Alligator: SMMA of median price, standard forward plot shifts.
+    # Jaw 13/8, Teeth 8/5, Lips 5/3. Current chart slot reads the smoothed
+    # value calculated shift bars earlier, matching the plotted indicator.
     median=[(h+l)/2 for h,l in zip(high,low)]
-    jaw_series=sma(median,13);teeth_series=sma(median,8);lips_series=sma(median,5)
+    jaw_series=shifted_smma(median,13,8)
+    teeth_series=shifted_smma(median,8,5)
+    lips_series=shifted_smma(median,5,3)
     jaw,teeth,lips=jaw_series[-1],teeth_series[-1],lips_series[-1]
-    alligator_spread_series=[l-t for l,t in zip(lips_series,jaw_series)]
-    alligator_gap=abs(alligator_spread_series[-1])
+    alligator_gap=abs(lips-jaw)
     alligator_gap_atr=alligator_gap/atr14 if atr14>1e-12 else 0.0
     alligator_direction=1 if lips>teeth>jaw else -1 if lips<teeth<jaw else 0
-    # Average change in Jaw-to-Lips separation over the last three candles,
-    # normalized by ATR so the same thresholds work across assets/timeframes.
-    alligator_expansion_rate=(abs(alligator_spread_series[-1])-abs(alligator_spread_series[-4]))/(3*atr14) if len(alligator_spread_series)>=4 and atr14>1e-12 else 0.0
+    jaw_lips_gap_series=[abs(l-j) if l is not None and j is not None else 0.0 for l,j in zip(lips_series,jaw_series)]
+    alligator_expansion_rate=(jaw_lips_gap_series[-1]-jaw_lips_gap_series[-4])/(3*atr14) if len(jaw_lips_gap_series)>=4 and atr14>1e-12 else 0.0
     alligator_expanding=bool(alligator_direction and alligator_expansion_rate>0.03)
     alligator_contracting=bool(alligator_gap_atr>0 and alligator_expansion_rate < -0.03)
     alligator_tight=bool(alligator_gap_atr<0.35)
@@ -98,9 +156,8 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     esa=ema(typical,10);dev=ema([abs(v-e) for v,e in zip(typical,esa)],10)
     ci=[(typical[i]-esa[i])/(.015*dev[i]) if dev[i]>1e-12 else 0 for i in range(len(typical))]
     wt1=ema(ci,21);wt2=sma(wt1,4)
-    # Period-3 fractal: three bars on either side; only the most recent confirmed fractal is used.
-    fh=any(high[-4] > max(high[-7:-4]+high[-3:]) for _ in [0]) if len(high)>=7 else False
-    fl=any(low[-4] < min(low[-7:-4]+low[-3:]) for _ in [0]) if len(low)>=7 else False
+    # Period-3 fractal: three closed bars on each side.
+    fh,fl=detect_fractal(high,low,period=3)
     votes={
       "ema_9_21": 1 if e9[-1]>e21[-1] else -1 if e9[-1]<e21[-1] else 0,
       "di_spread":1 if di_spread>0 else -1 if di_spread<0 else 0,
@@ -120,7 +177,7 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     # Confirmed Fractal-3 pivots: a low-pivot/down arrow is bullish (BUY)
     # and a high-pivot/up arrow is bearish (SELL), per the user's chart convention.
     # The pivot at -4 has three completed candles on its right.
-    fractal_direction=1 if fl else -1 if fh else 0
+    fractal_direction=fractal_signal_direction(fh,fl)
     # Entry requires a recent actual DI crossover. The confirmed period-3
     # fractal is only knowable after three right-side candles, so requiring
     # the DI cross on the exact same update misses otherwise aligned setups.
@@ -195,18 +252,10 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     # Alligator is a dynamic market-state input: tight lines warn of chop,
     # expanding aligned lines reward developing momentum, and contraction
     # warns that an otherwise valid move may be losing force.
-    alligator_bonus=0
-    if di_direction and alligator_tight:
-        alligator_bonus=-5
-    elif di_direction and alligator_direction==di_direction:
-        if alligator_gap_atr>=0.8 and alligator_expanding:
-            alligator_bonus=8
-        elif alligator_gap_atr>=0.35:
-            alligator_bonus=4
-        if alligator_contracting:
-            alligator_bonus=-4
-    elif di_direction and alligator_direction==-di_direction:
-        alligator_bonus=-4
+    alligator_bonus=alligator_score_adjustment(
+        di_direction,alligator_direction,alligator_tight,alligator_gap_atr,
+        alligator_expanding,alligator_contracting
+    )
     score+=alligator_bonus
     # Highest-priority pattern: confirmed user's directional fractal + a wide,
     # expanding DI X + the matching DI crossover. Award the maximum setup-strength
@@ -214,8 +263,6 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     fractal_wide_x_priority=bool(
         fractal_di_aligned
         and (bearish_di_expansion or bullish_di_expansion)
-        and di_cross_confirmed
-        and di_cross_direction==di_direction
     )
     if fractal_wide_x_priority:
         score=100
@@ -261,6 +308,10 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
       "alligator_jaw":round(jaw,6),"alligator_teeth":round(teeth,6),"alligator_lips":round(lips,6),
       "alligator_direction":"BUY" if alligator_direction==1 else "SELL" if alligator_direction==-1 else "MIXED",
       "alligator_gap":round(alligator_gap,8),"alligator_gap_atr":round(alligator_gap_atr,3),
+      "alligator_jaw_period":13,"alligator_jaw_shift":8,
+      "alligator_teeth_period":8,"alligator_teeth_shift":5,
+      "alligator_lips_period":5,"alligator_lips_shift":3,
+      "alligator_method":"SMMA median price (H+L)/2",
       "alligator_expansion_rate":round(alligator_expansion_rate,4),
       "alligator_expanding":alligator_expanding,"alligator_contracting":alligator_contracting,
       "alligator_tight":alligator_tight,"alligator_score_adjustment":alligator_bonus,
@@ -272,5 +323,5 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
       "bearish_di_expansion":bearish_di_expansion,"bullish_di_expansion":bullish_di_expansion,
       "macd_fading":macd_fading,"di_forecast":di_projection,
       "bullish_di_rollover_block":bullish_di_rollover_block,"timeframe_seconds":timeframe_seconds,
-      "early_cross":early_cross,"fractal_high_confirmed":fh,
+      "early_cross":early_cross,"fractal_period":3,"fractal_high_confirmed":fh,
       "fractal_low_confirmed":fl,"fractal_direction":"BUY" if fractal_direction==1 else "SELL" if fractal_direction==-1 else "WAIT", "di_cross_direction":"BUY" if di_cross_direction==1 else "SELL" if di_cross_direction==-1 else "WAIT", "di_cross_confirmed":di_cross_confirmed, "fractal_di_aligned":fractal_di_aligned, "fractal_wide_x_priority":fractal_wide_x_priority, "di_gap_valid":di_gap_valid, "minimum_di_gap":round(min_di_gap,3), "fakeout_risk":fakeout,"votes":votes}}

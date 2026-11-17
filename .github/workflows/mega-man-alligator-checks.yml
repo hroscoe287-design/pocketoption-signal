@@ -3,9 +3,11 @@ name: Mega Man Alligator checks
 on:
   push:
     branches:
+      - alligator-fractal3-clean-test
       - mega-man-pre-alligator-20261116
   pull_request:
     branches:
+      - mega-man-pre-alligator-20261116
       - mega-man-bot-ui
 
 jobs:
@@ -22,4 +24,4 @@ jobs:
         working-directory: mega_man_backend
         env:
           PYTHONPATH: .
-        run: python -m unittest discover -s ../tests -p "test_mega_man_alligator.py" -v
+        run: python -m unittest discover -s ../tests -p "test_mega_man_alligator*.py" -v
