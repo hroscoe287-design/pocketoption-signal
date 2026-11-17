@@ -48,6 +48,27 @@ def rsi(values,period=14):
     return 100-100/(1+ag/al)
 
 
+def fractal_signal_direction(upper, lower):
+    """User convention: upper/UP arrow is SELL; lower/DOWN arrow is BUY."""
+    if upper and lower:
+        return 0
+    return 1 if lower else -1 if upper else 0
+
+
+def alligator_score_adjustment(di_direction, alligator_direction, tight, gap_atr, expanding, contracting):
+    """Alligator modifies confluence only; it never creates or reverses direction."""
+    if not di_direction:
+        return 0
+    if tight:
+        return -5
+    if alligator_direction == di_direction:
+        bonus = 10 if gap_atr >= 0.8 and expanding else 6 if gap_atr >= 0.35 else 0
+        return -4 if contracting else bonus
+    if alligator_direction == -di_direction:
+        return -4
+    return 0
+
+
 def detect_fractal(high, low, period=3):
     """Return (upper-pivot, lower-pivot) after `period` closed right-side bars."""
     width=2*period+1
@@ -158,7 +179,7 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     elif adx>=20:score=min(100,score+5)
     # User's arrow convention: DOWN/lower pivot = BUY; UP/upper pivot = SELL.
     # If one window qualifies as both upper and lower, treat it as ambiguous.
-    fractal_direction=1 if fl and not fh else -1 if fh and not fl else 0
+    fractal_direction=fractal_signal_direction(fh,fl)
     # Entry requires a recent actual DI crossover. The confirmed period-3
     # fractal is only knowable after three right-side candles, so requiring
     # the DI cross on the exact same update misses otherwise aligned setups.
@@ -232,18 +253,10 @@ def analyze(candles,min_score=55,timeframe_seconds=5):
     score+=sum(w for k,w in context_weights.items() if votes[k]==di_direction and di_direction)
     # Alligator is a score modifier, never a replacement for the user's
     # fractal + DI direction. Agreement boosts the setup; disagreement reduces it.
-    alligator_bonus=0
-    if di_direction and alligator_tight:
-        alligator_bonus=-5
-    elif di_direction and alligator_direction==di_direction:
-        if alligator_gap_atr>=0.8 and alligator_expanding:
-            alligator_bonus=10
-        elif alligator_gap_atr>=0.35:
-            alligator_bonus=6
-        if alligator_contracting:
-            alligator_bonus=-4
-    elif di_direction and alligator_direction==-di_direction:
-        alligator_bonus=-4
+    alligator_bonus=alligator_score_adjustment(
+        di_direction,alligator_direction,alligator_tight,alligator_gap_atr,
+        alligator_expanding,alligator_contracting
+    )
     score+=alligator_bonus
     # Highest-priority pattern: confirmed user's directional fractal + a wide,
     # expanding DI X. Do not require a fresh crossover: an established, still-wide
