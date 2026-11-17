@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import threading
 from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,9 +15,25 @@ DEFAULT_TF = int(os.getenv("PO_DEFAULT_TIMEFRAME_SECONDS", "5"))
 TIMEFRAMES = {5, 15, 30, 60, 300, 900, 3600}
 STARTED = time.time()
 
+def _prime_default_market():
+    # Open a real broker subscription as soon as the authenticated socket is ready.
+    # This is market-data only; it never places orders.
+    deadline = time.time() + 75
+    while time.time() < deadline:
+        if feed.client is not None:
+            try:
+                result = feed.snapshot(DEFAULT_ASSET, DEFAULT_TF)
+                if result.get("verified"):
+                    return
+            except Exception as exc:
+                import logging
+                logging.getLogger("mega_man").warning("Default market warm-up failed (%s)", type(exc).__name__)
+        time.sleep(5)
+
 @asynccontextmanager
 async def lifespan(app):
     feed.start()
+    threading.Thread(target=_prime_default_market, daemon=True, name="mega-man-default-market").start()
     yield
 
 app = FastAPI(title="Mega Man Signal API", version="2.0.0", lifespan=lifespan)
