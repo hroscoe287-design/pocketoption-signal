@@ -392,7 +392,10 @@ class PocketOptionFeed:
                 return self._response(asset,tf,bars,last,False,"Waiting for Pocket Option server time sync")
             actual=asset
             try:
-                catalog=client.get_assets() or {}
+                # Resolve against the actual broker catalog populated by
+                # the WebSocket updateAssets event, not get_assets() pending deals.
+                api=getattr(client,"api",None)
+                catalog=getattr(api,"_assets_catalog",{}) or {}
                 # Catalog keys are broker symbols; metadata names are display labels
                 # (for example "Gold"). Resolve display labels to the real symbol.
                 records=[]
