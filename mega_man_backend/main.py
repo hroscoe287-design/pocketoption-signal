@@ -136,7 +136,12 @@ def api_assets():
         return {"live": False, "status": feed.status, "count": 0, "assets": [],
                 "automatic_execution": False}
     try:
-        raw = client.get_assets() or {}
+        # PocketOptionApi's get_assets() currently returns pending deals in some builds.
+        # The authoritative broker catalog is populated by the WebSocket updateAssets event.
+        api = getattr(client, "api", None)
+        raw = getattr(api, "_assets_catalog", None) if api is not None else None
+        if not isinstance(raw, dict):
+            raw = {}
         symbols = set()
         fields = ("symbol", "name", "asset", "ticker", "active_symbol", "instrument",
                   "activeSymbol", "asset_name", "assetName")
