@@ -1,0 +1,327 @@
+"""Transparent technical confluence. Score is NOT a win probability."""
+from __future__ import annotations
+from math import isfinite
+from di_forecast import forecast_di
+
+
+def ema(values, period):
+    if not values or period < 1:return []
+    alpha=2.0/(period+1.0); out=[float(values[0])]
+    for v in values[1:]:out.append(alpha*float(v)+(1-alpha)*out[-1])
+    return out
+
+
+def sma(values,period):
+    return [sum(values[max(0,i-period+1):i+1])/len(values[max(0,i-period+1):i+1]) for i in range(len(values))]
+
+
+def smma(values, period):
+    """Williams-style smoothed moving average, seeded with the first-period SMA."""
+    if period < 1 or len(values) < period:
+        return []
+    first = sum(float(v) for v in values[:period]) / period
+    out = [None] * (period - 1) + [first]
+    current = first
+    for value in values[period:]:
+        current = (current * (period - 1) + float(value)) / period
+        out.append(current)
+    return out
+
+
+def shifted_smma(values, period, shift):
+    """Alligator line plotted forward: chart slot uses the value from shift bars earlier."""
+    raw = smma(values, period)
+    if not raw:
+        return [None] * len(values)
+    out = [None] * len(values)
+    for i in range(shift, len(values)):
+        out[i] = raw[i - shift]
+    return out
+
+
+def rsi(values,period=14):
+    if len(values)<=period:return None
+    changes=[float(b)-float(a) for a,b in zip(values[:-1],values[1:])]
+    gains=[max(v,0) for v in changes];losses=[max(-v,0) for v in changes]
+    ag=sum(gains[-period:])/period;al=sum(losses[-period:])/period
+    if al==0:return 100.0 if ag else 50.0
+    return 100-100/(1+ag/al)
+
+
+def detect_fractal(high, low, period=3):
+    """Return (upper-pivot, lower-pivot) after period closed right-side bars."""
+    width=2*period+1
+    if period < 1 or len(high) < width or len(low) < width:
+        return False, False
+    pivot=len(high)-period-1
+    left_h=high[pivot-period:pivot]; right_h=high[pivot+1:pivot+period+1]
+    left_l=low[pivot-period:pivot]; right_l=low[pivot+1:pivot+period+1]
+    return high[pivot] > max(left_h+right_h), low[pivot] < min(left_l+right_l)
+
+
+def fractal_signal_direction(upper, lower):
+    """User convention: upper/UP arrow is SELL; lower/DOWN arrow is BUY."""
+    if upper and lower:
+        return 0
+    return 1 if lower else -1 if upper else 0
+
+
+def alligator_score_adjustment(di_direction, alligator_direction, tight, gap_atr, expanding, contracting):
+    """Alligator modifies confluence only; it never creates or reverses direction."""
+    if not di_direction:
+        return 0
+    if tight:
+        return -5
+    if alligator_direction == di_direction:
+        bonus = 10 if gap_atr >= 0.8 and expanding else 6 if gap_atr >= 0.35 else 0
+        return -4 if contracting else bonus
+    if alligator_direction == -di_direction:
+        return -4
+    return 0
+
+
+def analyze(candles,min_score=55,timeframe_seconds=5):
+    if len(candles)<60:
+        return {"direction":"WAIT","score":0,"ready":False,"eligible":False,"reason":"Need 60 verified candles for stable indicator context","components":{}}
+    try:
+        close=[float(c["close"]) for c in candles];high=[float(c["high"]) for c in candles];low=[float(c["low"]) for c in candles]
+        if not all(isfinite(v) for v in close+high+low):raise ValueError()
+        if any(lo<=0 or hi<lo or hi<max(o,c) or lo>min(o,c) for lo,hi,o,c in zip(low,high,[float(x["open"]) for x in candles],close)):raise ValueError()
+    except (ValueError,TypeError,KeyError,OverflowError):
+        return {"direction":"WAIT","score":0,"ready":False,"eligible":False,"reason":"Malformed candles","components":{}}
+    e9,e21=ema(close,9),ema(close,21)
+    rv=rsi(close,14)
+    # MACD 12/26/9
+    macd=[a-b for a,b in zip(ema(close,12),ema(close,26))]
+    ms=ema(macd,9); hist=macd[-1]-ms[-1]
+    # Directional movement, DI length 7 and Wilder smoothing 14.
+    plus=[];minus=[];tr=[]
+    for i in range(1,len(close)):
+        up=high[i]-high[i-1];dn=low[i-1]-low[i]
+        plus.append(up if up>dn and up>0 else 0.0);minus.append(dn if dn>up and dn>0 else 0.0)
+        tr.append(max(high[i]-low[i],abs(high[i]-close[i-1]),abs(low[i]-close[i-1])))
+    def wilder(xs,n):
+        if len(xs)<n:return []
+        val=sum(xs[:n])/n;out=[val]
+        for v in xs[n:]:val=(val*(n-1)+v)/n;out.append(val)
+        return out
+    p7,m7,t7=wilder(plus,7),wilder(minus,7),wilder(tr,7)
+    p14,m14,t14=wilder(plus,14),wilder(minus,14),wilder(tr,14)
+    if not p7 or not m7 or not t7 or not t7[-1] or not p14 or not m14 or not t14 or not t14[-1]:
+        return {"direction":"WAIT","score":0,"ready":False,"eligible":False,"reason":"Insufficient directional-movement data","components":{}}
+    dip_series=[100*x/y for x,y in zip(p7,t7) if y]
+    dim_series=[100*x/y for x,y in zip(m7,t7) if y]
+    dip,dim=100*p7[-1]/t7[-1],100*m7[-1]/t7[-1]
+    di_spread=dip-dim
+    di_spread_series=[(100*a/b-100*c/d) if b and d else 0.0 for a,b,c,d in zip(p7,t7,m7,t7)]
+    prev_spread=di_spread_series[-2] if len(di_spread_series)>1 else di_spread
+    di_velocity=di_spread-prev_spread
+    # On very short charts, react to direction changes, not just line position.
+    # Use a short multi-bar slope so a single tiny fluctuation is not over-read.
+    di_plus_delta=(dip_series[-1]-dip_series[-2]) if len(dip_series)>1 else 0.0
+    di_minus_delta=(dim_series[-1]-dim_series[-2]) if len(dim_series)>1 else 0.0
+    di_plus_falling_two_bars=(len(dip_series)>=3 and dip_series[-1] < dip_series[-2] < dip_series[-3])
+    di_minus_rising_two_bars=(len(dim_series)>=3 and dim_series[-1] > dim_series[-2] > dim_series[-3])
+    macd_hist_series=[a-b for a,b in zip(macd,ms)]
+    macd_fading=(len(macd_hist_series)>=3 and macd_hist_series[-1] < macd_hist_series[-2] < macd_hist_series[-3])
+    di_plus_turning_down=di_plus_delta < -0.03 or di_plus_falling_two_bars
+    di_accel=di_velocity-((prev_spread-(100*p7[-3]/t7[-3]-100*m7[-3]/t7[-3])) if len(p7)>2 and t7[-3] else di_velocity)
+    dip14,dim14=100*p14[-1]/t14[-1],100*m14[-1]/t14[-1]
+    dx=[100*abs(a-b)/(a+b) if a+b else 0 for a,b in zip([100*x/y if y else 0 for x,y in zip(p14,t14)],[100*x/y if y else 0 for x,y in zip(m14,t14)])]
+    adx_series=wilder(dx,14);adx=adx_series[-1] if adx_series else 0
+    # Volatility context: ATR(14) normalized by price, plus latest candle body/range.
+    true_ranges=[max(high[i]-low[i],abs(high[i]-close[i-1]),abs(low[i]-close[i-1])) for i in range(1,len(close))]
+    atr14=sum(true_ranges[-14:])/min(14,len(true_ranges)) if true_ranges else 0.0
+    volatility_pct=(atr14/close[-1])*100 if close[-1] else 0.0
+    candle_range=max(0.0,high[-1]-low[-1]); candle_body=abs(close[-1]-float(candles[-1]["open"]))
+    body_ratio=candle_body/candle_range if candle_range else 0.0
+    # Classic Williams Alligator: SMMA of median price, standard forward plot shifts.
+    # Jaw 13/8, Teeth 8/5, Lips 5/3. Current chart slot reads the smoothed
+    # value calculated shift bars earlier, matching the plotted indicator.
+    median=[(h+l)/2 for h,l in zip(high,low)]
+    jaw_series=shifted_smma(median,13,8)
+    teeth_series=shifted_smma(median,8,5)
+    lips_series=shifted_smma(median,5,3)
+    jaw,teeth,lips=jaw_series[-1],teeth_series[-1],lips_series[-1]
+    alligator_gap=abs(lips-jaw)
+    alligator_gap_atr=alligator_gap/atr14 if atr14>1e-12 else 0.0
+    alligator_direction=1 if lips>teeth>jaw else -1 if lips<teeth<jaw else 0
+    jaw_lips_gap_series=[abs(l-j) if l is not None and j is not None else 0.0 for l,j in zip(lips_series,jaw_series)]
+    alligator_expansion_rate=(jaw_lips_gap_series[-1]-jaw_lips_gap_series[-4])/(3*atr14) if len(jaw_lips_gap_series)>=4 and atr14>1e-12 else 0.0
+    alligator_expanding=bool(alligator_direction and alligator_expansion_rate>0.03)
+    alligator_contracting=bool(alligator_gap_atr>0 and alligator_expansion_rate < -0.03)
+    alligator_tight=bool(alligator_gap_atr<0.35)
+    # WaveTrend-style oscillator.
+    typical=[(h+l+c)/3 for h,l,c in zip(high,low,close)]
+    esa=ema(typical,10);dev=ema([abs(v-e) for v,e in zip(typical,esa)],10)
+    ci=[(typical[i]-esa[i])/(.015*dev[i]) if dev[i]>1e-12 else 0 for i in range(len(typical))]
+    wt1=ema(ci,21);wt2=sma(wt1,4)
+    # Period-3 fractal: three closed bars on each side.
+    fh,fl=detect_fractal(high,low,period=3)
+    votes={
+      "ema_9_21": 1 if e9[-1]>e21[-1] else -1 if e9[-1]<e21[-1] else 0,
+      "di_spread":1 if di_spread>0 else -1 if di_spread<0 else 0,
+      "macd":1 if hist>0 else -1 if hist<0 else 0,
+      "rsi":1 if rv is not None and rv>=52 else -1 if rv is not None and rv<=48 else 0,
+      "wavetrend":1 if wt1[-1]>wt2[-1] else -1 if wt1[-1]<wt2[-1] else 0,
+      "alligator":1 if lips>teeth>jaw else -1 if lips<teeth<jaw else 0,
+    }
+    weights={"ema_9_21":20,"di_spread":20,"macd":15,"rsi":10,"wavetrend":10,"alligator":10,"adx":10,"fractal":5}
+    bull=sum(weights[k] for k,v in votes.items() if v==1)
+    bear=sum(weights[k] for k,v in votes.items() if v==-1)
+    direction=1 if bull>bear else -1 if bear>bull else 0
+    score=(bull if direction==1 else bear if direction==-1 else 0)
+    # ADX confirms trend quality; it never chooses direction by itself.
+    if adx<15:score=max(0,score-10)
+    elif adx>=20:score=min(100,score+5)
+    # Confirmed Fractal-3 pivots: a low-pivot/down arrow is bullish (BUY)
+    # and a high-pivot/up arrow is bearish (SELL), per the user's chart convention.
+    # The pivot at -4 has three completed candles on its right.
+    fractal_direction=fractal_signal_direction(fh,fl)
+    # Entry requires a recent actual DI crossover. The confirmed period-3
+    # fractal is only knowable after three right-side candles, so requiring
+    # the DI cross on the exact same update misses otherwise aligned setups.
+    # Accept a cross in the latest three completed DI observations, but only
+    # while the current spread still agrees with that cross direction.
+    di_cross_direction=0
+    for j in range(len(di_spread_series)-1, max(0, len(di_spread_series)-4), -1):
+        before, after = di_spread_series[j-1], di_spread_series[j]
+        if before <= 0 < after:
+            di_cross_direction=1
+            break
+        if before >= 0 > after:
+            di_cross_direction=-1
+            break
+    if di_cross_direction == 1 and di_spread <= 0:
+        di_cross_direction=0
+    elif di_cross_direction == -1 and di_spread >= 0:
+        di_cross_direction=0
+    di_cross_confirmed=bool(di_cross_direction)
+    # Current DI line position carries the direction after the crossover.
+    # The crossover is a timing bonus, not a requirement that expires after 3 bars.
+    di_direction=1 if di_spread>0 else -1 if di_spread<0 else 0
+    fractal_di_aligned=bool(fractal_direction and fractal_direction==di_direction)
+    # Wider X gets more weight. Very short 5s/15s charts may use a smaller
+    # separation; larger timeframes demand a wider DI gap.
+    min_di_gap=max(0.75,max(dip,dim)*0.04) if timeframe_seconds<=15 else max(2.0,max(dip,dim)*0.10)
+    di_gap_valid=abs(di_spread)>=min_di_gap
+    di_momentum_aligned=bool(di_direction and di_velocity*di_direction>0)
+    acceleration_aligned=bool(di_direction and di_accel*di_direction>0)
+    # Explicitly recognize a broad bearish/bullish DI "X": the winning DI
+    # line is rising while the opposing line is falling and the spread is
+    # already wide and expanding. This remains valid after the zero-line
+    # crossover, even when the confirmed fractal arrives later.
+    bearish_di_expansion=bool(
+        di_direction==-1 and di_gap_valid and di_minus_rising_two_bars
+        and di_plus_falling_two_bars and di_velocity<0
+    )
+    bullish_di_expansion=bool(
+        di_direction==1 and di_gap_valid and di_plus_delta>0
+        and di_minus_delta<0 and di_velocity>0
+    )
+    bullish_di_rollover_block=bool(timeframe_seconds<=15 and di_direction==1 and (
+        di_plus_turning_down or (di_minus_rising_two_bars and macd_fading)
+    ))
+    # Weighted directional confluence (0–100). DI line structure is the
+    # primary signal. A wide, expanding X can qualify without a matching
+    # fractal; a matching confirmed fractal adds a substantial bonus.
+    score=0
+    if di_direction and fractal_direction==di_direction:
+        score+=20
+    elif di_direction and fractal_direction==-di_direction:
+        score-=6
+    if di_direction and di_gap_valid:
+        gap_ratio=abs(di_spread)/max(min_di_gap,1e-9)
+        score+=30 if gap_ratio>=2.0 else 25 if gap_ratio>=1.5 else 18
+    elif di_direction:
+        score+=3
+    if di_momentum_aligned: score+=10
+    if acceleration_aligned: score+=5
+    if di_cross_confirmed and di_cross_direction==di_direction: score+=5
+    # A wide, expanding DI X is a primary pattern, not merely a small bonus.
+    # Reward the actual line motion so a bearish -DI-over-+DI crossover is
+    # not missed just because the fractal confirmation is delayed.
+    if bearish_di_expansion or bullish_di_expansion: score+=15
+    if adx>=25: score+=15
+    elif adx>=20: score+=12
+    elif adx>=15: score+=9
+    elif adx>=8: score+=5
+    # Secondary trend context contributes at most 15 points.
+    context_weights={"ema_9_21":4,"macd":4,"rsi":3,"wavetrend":2}
+    score+=sum(w for k,w in context_weights.items() if votes[k]==di_direction and di_direction)
+    # Alligator is a dynamic market-state input: tight lines warn of chop,
+    # expanding aligned lines reward developing momentum, and contraction
+    # warns that an otherwise valid move may be losing force.
+    alligator_bonus=alligator_score_adjustment(
+        di_direction,alligator_direction,alligator_tight,alligator_gap_atr,
+        alligator_expanding,alligator_contracting
+    )
+    score+=alligator_bonus
+    # Highest-priority pattern: confirmed user's directional fractal + a wide,
+    # expanding DI X + the matching DI crossover. Award the maximum setup-strength
+    # score in either direction; existing fakeout/ADX eligibility gates still apply.
+    fractal_wide_x_priority=bool(
+        fractal_di_aligned
+        and (bearish_di_expansion or bullish_di_expansion)
+    )
+    if fractal_wide_x_priority:
+        score=100
+    score=max(0,score)
+
+    # Flag choppy Xs: multiple sign flips in the recent DI history indicate
+    # a whipsaw. A wide, still-expanding spread is not blocked just because
+    # the confirmed fractal is absent or points the other way.
+    recent_spreads=di_spread_series[-6:]
+    recent_flips=sum(1 for a,b in zip(recent_spreads[:-1],recent_spreads[1:]) if a*b<0)
+    adverse_momentum=bool(di_direction and di_velocity*di_direction<0)
+    collapsing_x=bool(adverse_momentum and abs(di_spread)<min_di_gap*1.5)
+    small_x=not di_gap_valid
+    fakeout=bool(di_direction and (small_x or collapsing_x or recent_flips>=2))
+    direction=di_direction
+    eligible=bool(direction and di_gap_valid and score>=min_score and adx>=8 and not fakeout and not bullish_di_rollover_block)
+    if not eligible:
+        direction=0
+    reason=("DI+ rollover / MACD fade — BUY blocked" if bullish_di_rollover_block else
+            "Wide DI X with matching confirmed fractal" if eligible and fractal_di_aligned else
+            "Wide DI X directional signal; fractal not aligned/confirmed" if eligible else
+            "Small DI X / whipsaw / collapsing spread — fakeout risk" if fakeout else
+            "Trend strength too weak (ADX < 8)" if adx<8 else
+            f"Weighted confluence below {min_score}/100" if score<min_score else
+            "No qualified DI direction")
+    score=min(100,max(0,score))
+    early_cross=(prev_spread<=0<di_spread) if direction==1 else ((prev_spread>=0>di_spread) if direction==-1 else False)
+    market_context=f"Verified candles: {len(candles)}; EMA trend {'bullish' if e9[-1]>e21[-1] else 'bearish' if e9[-1]<e21[-1] else 'flat'}"
+    volatility_context=f"ATR14 {atr14:.6g} ({volatility_pct:.4f}% of price); latest candle body/range {body_ratio:.2f}"
+    pattern_context=f"DI spread {di_spread:.2f}, velocity {di_velocity:.2f}; Alligator {'expanding' if alligator_expanding else 'contracting' if alligator_contracting else 'tight' if alligator_tight else 'aligned' if alligator_direction else 'mixed'} (gap {alligator_gap_atr:.2f} ATR); MACD {'positive' if hist>0 else 'negative' if hist<0 else 'flat'}; fractal confirmation {'yes' if fractal_direction==direction and direction else 'no'}"
+    final_context=f"{'BUY/CALL' if direction==1 else 'SELL/PUT' if direction==-1 else 'WAIT'}; score {score}/100; {'eligible for signal' if eligible else reason}"
+    di_projection=forecast_di(dip_series,dim_series,timeframe_seconds)
+    return {"direction":"BUY/CALL" if direction==1 else "SELL/PUT" if direction==-1 else "WAIT",
+      "score":score,"ready":True,"eligible":eligible,"reason":reason,
+      "stages":[
+        {"name":"Market Context","status":"complete","summary":market_context},
+        {"name":"Volatility Analysis","status":"complete","summary":volatility_context},
+        {"name":"Pattern Matching","status":"complete","summary":pattern_context},
+        {"name":"Finalizing Signal","status":"complete" if eligible else "blocked","summary":final_context}
+      ],
+      "components":{"atr14":round(atr14,8),"volatility_pct":round(volatility_pct,5),"latest_candle_body_ratio":round(body_ratio,3),"ema9":round(e9[-1],6),"ema21":round(e21[-1],6),"rsi14":round(rv,2) if rv is not None else None,
+      "macd_histogram":round(hist,7),"wave_trend_1":round(wt1[-1],3),"wave_trend_2":round(wt2[-1],3),
+      "alligator_jaw":round(jaw,6),"alligator_teeth":round(teeth,6),"alligator_lips":round(lips,6),
+      "alligator_direction":"BUY" if alligator_direction==1 else "SELL" if alligator_direction==-1 else "MIXED",
+      "alligator_gap":round(alligator_gap,8),"alligator_gap_atr":round(alligator_gap_atr,3),
+      "alligator_jaw_period":13,"alligator_jaw_shift":8,
+      "alligator_teeth_period":8,"alligator_teeth_shift":5,
+      "alligator_lips_period":5,"alligator_lips_shift":3,
+      "alligator_method":"SMMA median price (H+L)/2",
+      "alligator_expansion_rate":round(alligator_expansion_rate,4),
+      "alligator_expanding":alligator_expanding,"alligator_contracting":alligator_contracting,
+      "alligator_tight":alligator_tight,"alligator_score_adjustment":alligator_bonus,
+      "plus_di_7":round(dip,3),"minus_di_7":round(dim,3),"plus_di_14":round(dip14,3),"minus_di_14":round(dim14,3),
+      "adx_14":round(adx,3),"di_spread":round(di_spread,3),"spread_velocity":round(di_velocity,3),
+      "spread_acceleration":round(di_accel,3),"di_plus_delta":round(di_plus_delta,3),
+      "di_minus_delta":round(di_minus_delta,3),"di_plus_turning_down":di_plus_turning_down,
+      "di_plus_falling_two_bars":di_plus_falling_two_bars,"di_minus_rising_two_bars":di_minus_rising_two_bars,
+      "bearish_di_expansion":bearish_di_expansion,"bullish_di_expansion":bullish_di_expansion,
+      "macd_fading":macd_fading,"di_forecast":di_projection,
+      "bullish_di_rollover_block":bullish_di_rollover_block,"timeframe_seconds":timeframe_seconds,
+      "early_cross":early_cross,"fractal_period":3,"fractal_high_confirmed":fh,
+      "fractal_low_confirmed":fl,"fractal_direction":"BUY" if fractal_direction==1 else "SELL" if fractal_direction==-1 else "WAIT", "di_cross_direction":"BUY" if di_cross_direction==1 else "SELL" if di_cross_direction==-1 else "WAIT", "di_cross_confirmed":di_cross_confirmed, "fractal_di_aligned":fractal_di_aligned, "fractal_wide_x_priority":fractal_wide_x_priority, "di_gap_valid":di_gap_valid, "minimum_di_gap":round(min_di_gap,3), "fakeout_risk":fakeout,"votes":votes}}
