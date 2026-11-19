@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import os, time, socket
@@ -48,6 +50,11 @@ def market_snapshot(asset: str, tf: int):
     if tf not in TIMEFRAMES:
         raise HTTPException(status_code=422, detail="Choose 5s, 10s, 15s, 30s, 1m, 5m, 15m, or 1h.")
     return feed.snapshot(broker_asset(asset), tf)
+
+@app.get("/dashboard")
+def dashboard():
+    page = Path(__file__).resolve().parents[1] / "frontend" / "index.html"
+    return FileResponse(page, media_type="text/html")
 
 @app.get("/")
 def root():
