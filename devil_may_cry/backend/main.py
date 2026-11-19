@@ -6,12 +6,12 @@ from pydantic import BaseModel, Field
 import os, time, socket
 from urllib.parse import urlparse
 from feed import feed
-from engine import analyze
+from dmc_engine import analyze
 
-FRONTEND = os.getenv("FRONTEND_URL", "https://mega-man-alligator-lab.onrender.com").rstrip("/")
+FRONTEND = os.getenv("FRONTEND_URL", "https://devil-may-cry-lab.onrender.com").rstrip("/")
 DEFAULT_ASSET = os.getenv("PO_DEFAULT_ASSET", "EURUSD_otc")
-DEFAULT_TF = int(os.getenv("PO_DEFAULT_TIMEFRAME_SECONDS", "5"))
-TIMEFRAMES = {5, 15, 30, 60, 300, 900, 3600}
+DEFAULT_TF = int(os.getenv("PO_DEFAULT_TIMEFRAME_SECONDS", "10"))
+TIMEFRAMES = {5, 10, 15, 30, 60, 300, 900, 3600}
 STARTED = time.time()
 
 @asynccontextmanager
@@ -19,7 +19,7 @@ async def lifespan(app):
     feed.start()
     yield
 
-app = FastAPI(title="Mega Man Signal API", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="DEVIL MAY CRY Signal API", version="2.0.0", lifespan=lifespan)
 origins = [x.strip() for x in os.getenv("CORS_ORIGINS", FRONTEND).split(",") if x.strip()]
 app.add_middleware(
     CORSMiddleware, allow_origins=origins, allow_credentials=False,
@@ -46,13 +46,13 @@ def broker_asset(value: str) -> str:
 
 def market_snapshot(asset: str, tf: int):
     if tf not in TIMEFRAMES:
-        raise HTTPException(status_code=422, detail="Choose 5s, 15s, 30s, 1m, 5m, 15m, or 1h.")
+        raise HTTPException(status_code=422, detail="Choose 5s, 10s, 15s, 30s, 1m, 5m, 15m, or 1h.")
     return feed.snapshot(broker_asset(asset), tf)
 
 @app.get("/")
 def root():
     return {
-        "name": "Mega Man Signal API", "status": "online",
+        "name": "DEVIL MAY CRY Signal API", "status": "online",
         "feed_source": "Direct Pocket Option connection",
         "auth_configured": bool(feed._auth()), "auth_status": feed.auth_status(), "feed_status": feed.status, "signals": "analysis-only",
         "automatic_execution": False
@@ -61,7 +61,7 @@ def root():
 @app.get("/health")
 def health():
     return {
-        "ok": True, "service": "Mega Man independent feed",
+        "ok": True, "service": "DEVIL MAY CRY independent feed",
         "feed_source": "Pocket Option direct", "auth_configured": bool(feed._auth()),
         "auth_status": feed.auth_status(),
         "feed_status": feed.status, "uptime_seconds": round(time.time() - STARTED, 1),
@@ -196,7 +196,7 @@ def analyze_request(req: AnalyzeRequest):
     candles = data.get("candles", [])
     if not data.get("verified"):
         raise HTTPException(status_code=503, detail={
-            "message": "Mega Man's direct Pocket Option feed is not verified yet. No signal was generated.",
+            "message": "DEVIL MAY CRY's direct Pocket Option feed is not verified yet. No signal was generated.",
             "auth_status": feed.auth_status(),
             "feed_status": data.get("status", feed.status),
             "auth_configured": bool(feed._auth()),
