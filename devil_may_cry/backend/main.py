@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -58,6 +58,11 @@ def dashboard():
 
 @app.get("/")
 def root():
+    # Make the public service URL open the actual bot dashboard, not raw API JSON.
+    return RedirectResponse(url="/dashboard", status_code=307)
+
+@app.get("/api/status")
+def api_status():
     return {
         "name": "DEVIL MAY CRY Signal API", "status": "online",
         "feed_source": "Direct Pocket Option connection",
