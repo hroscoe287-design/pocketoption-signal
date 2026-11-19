@@ -10,7 +10,7 @@ def _clamp(value, low, high):
     return max(low, min(high, value))
 
 
-def _aroon(high, low, period=30):
+def _aroon(high, low, period=10):
     if len(high) < period or len(low) < period:
         return 0.0, 0.0
     hs, ls = high[-period:], low[-period:]
@@ -19,7 +19,7 @@ def _aroon(high, low, period=30):
     return ((period - since_high) / period) * 100.0, ((period - since_low) / period) * 100.0
 
 
-def _osma(close, fast=30, slow=60, signal=30):
+def _osma(close, fast=10, slow=20, signal=10):
     if len(close) < slow + signal:
         return 0.0, 0.0, 0.0
     line = [a - b for a, b in zip(ema(close, fast), ema(close, slow))]
@@ -31,11 +31,11 @@ def _osma(close, fast=30, slow=60, signal=30):
 def analyze(candles, min_score=70, timeframe_seconds=10):
     base = analyze_alligator(candles, min_score=55, timeframe_seconds=timeframe_seconds)
     components = dict(base.get("components") or {})
-    if not base.get("ready") or len(candles) < 90:
+    if not base.get("ready") or len(candles) < 60:
         base["score"] = 0
         base["eligible"] = False
         base["direction"] = "WAIT"
-        base["reason"] = "Collecting at least 90 verified candles for Aroon 30 and OSMA 30/60/30."
+        base["reason"] = "Collecting at least 60 verified candles for the Alligator baseline, Aroon 10 and OSMA 10/20/10."
         base["components"] = components
         return base
 
@@ -75,8 +75,8 @@ def analyze(candles, min_score=70, timeframe_seconds=10):
     if ag_tight: alligator_score = min(alligator_score, 5)
     alligator_score = _clamp(alligator_score, 0, 20)
 
-    # 3) Aroon(30) — 15 points.
-    aroon_up, aroon_down = _aroon(high, low, 30)
+    # 3) Aroon(10) — 15 points.
+    aroon_up, aroon_down = _aroon(high, low, 10)
     aroon_dir = 1 if aroon_up > aroon_down else -1 if aroon_down > aroon_up else 0
     aroon_gap = abs(aroon_up - aroon_down)
     aroon_score = 0
@@ -84,8 +84,8 @@ def analyze(candles, min_score=70, timeframe_seconds=10):
         aroon_score = 10 + (5 if aroon_gap >= 50 else 3 if aroon_gap >= 25 else 1)
     aroon_score = _clamp(aroon_score, 0, 15)
 
-    # 4) OSMA(30,60,30) — 15 points; positive/rising supports BUY, negative/falling SELL.
-    osma_line, osma_signal, osma_delta = _osma(close, 30, 60, 30)
+    # 4) OSMA(10,20,10) — 15 points; positive/rising supports BUY, negative/falling SELL.
+    osma_line, osma_signal, osma_delta = _osma(close, 10, 20, 10)
     osma_hist = osma_line - osma_signal
     osma_dir = 1 if osma_hist > 0 else -1 if osma_hist < 0 else 0
     osma_score = 0
@@ -120,10 +120,10 @@ def analyze(candles, min_score=70, timeframe_seconds=10):
         "scoring_model": "DEVIL MAY CRY 35/20/15/15/15",
         "di_score": di_score, "di_max": 35,
         "alligator_score": alligator_score, "alligator_max": 20,
-        "aroon_period": 30, "aroon_up": round(aroon_up, 2), "aroon_down": round(aroon_down, 2),
+        "aroon_period": 10, "aroon_up": round(aroon_up, 2), "aroon_down": round(aroon_down, 2),
         "aroon_direction": "BUY" if aroon_dir == 1 else "SELL" if aroon_dir == -1 else "NEUTRAL",
         "aroon_score": aroon_score, "aroon_max": 15,
-        "osma_fast_ema": 30, "osma_slow_ema": 60, "osma_signal_sma": 30,
+        "osma_fast_ema": 10, "osma_slow_ema": 20, "osma_signal_sma": 10,
         "osma_line": round(osma_line, 10), "osma_signal": round(osma_signal, 10),
         "osma_histogram": round(osma_hist, 10), "osma_histogram_delta": round(osma_delta, 10),
         "osma_direction": "BUY" if osma_dir == 1 else "SELL" if osma_dir == -1 else "NEUTRAL",
