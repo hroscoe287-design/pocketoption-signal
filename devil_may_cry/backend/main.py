@@ -9,6 +9,10 @@ import os, time, socket
 from urllib.parse import urlparse
 from feed import feed
 from dmc_engine import analyze
+try:
+    from pocketoptionapi.constants import ACTIVES as BROKER_KNOWN_ASSETS
+except Exception:
+    BROKER_KNOWN_ASSETS = {}
 
 FRONTEND = os.getenv("FRONTEND_URL", "https://devil-may-cry-lab.onrender.com").rstrip("/")
 DEFAULT_ASSET = os.getenv("PO_DEFAULT_ASSET", "EURUSD_otc")
@@ -143,50 +147,68 @@ def network_diagnostics():
 
 @app.get("/api/assets")
 def api_assets():
-    client = feed.client
-    if client is None:
-        return {"live": False, "status": feed.status, "count": 0, "assets": [],
-                "automatic_execution": False}
+    """Return live broker symbols plus known broker symbols when disconnected.
+
+    The fallback list is for menu selection only; it never marks a feed live.
+    """
+    symbols = set()
     try:
-        # PocketOptionClient.get_assets() is not the full broker catalog; it can
-        # expose pending deals. The authenticated WebSocket updateAssets event
-        # populates api._assets_catalog with the broker's tradable instruments.
-        api = getattr(client, "api", None)
-        raw = getattr(api, "_assets_catalog", {}) or {}
-        symbols = set()
-        fields = ("symbol", "name", "asset", "ticker", "active_symbol", "instrument",
-                  "activeSymbol", "asset_name", "assetName")
-        def add(value):
-            if isinstance(value, str):
-                value = value.strip()
-                # Do not discard broker symbols just because they contain digits (e.g. crypto tickers).
-                if value and not value.isdigit() and len(value) <= 80:
-                    symbols.add(value)
-            elif isinstance(value, dict):
-                for field in fields:
-                    item = value.get(field)
-                    if isinstance(item, str) and item.strip():
-                        symbols.add(item.strip())
-        if isinstance(raw, dict):
-            for key, value in raw.items():
-                # Catalogs can be symbol->metadata or numeric-id->symbol mappings.
-                add(key)
-                add(value)
-        elif isinstance(raw, (list, tuple, set)):
-            for item in raw:
-                add(item)
-        # Keep only plausible symbols; metadata-only values are not selectable assets.
-        symbols = {s for s in symbols if len(s) <= 80 and any(ch.isalpha() for ch in s)}
+        symbols.update(
+            str(symbol).strip()
+            for symbol in BROKER_KNOWN_ASSETS.keys()
+            if isinstance(symbol, str) and symbol.strip()
+        )
+    except Exception:
+        pass
+
+    client = feed.client
+    live_connected = False
+    live_catalog_count = 0
+    if client is not None:
         try:
-            connected = bool(client.check_connect())
+            api = getattr(client, "api", None)
+            raw = getattr(api, "_assets_catalog", {}) or {}
+            fields = ("symbol", "name", "asset", "ticker", "active_symbol", "instrument",
+                      "activeSymbol", "asset_name", "assetName")
+            def add(value):
+                if isinstance(value, str):
+                    value = value.strip()
+                    if value and not value.isdigit() and len(value) <= 80:
+                        symbols.add(value)
+                elif isinstance(value, dict):
+                    for field in fields:
+                        item = value.get(field)
+                        if isinstance(item, str) and item.strip():
+                            symbols.add(item.strip())
+            if isinstance(raw, dict):
+                for key, value in raw.items():
+                    add(key)
+                    add(value)
+            elif isinstance(raw, (list, tuple, set)):
+                for item in raw:
+                    add(item)
+            live_catalog_count = len(raw) if hasattr(raw, "__len__") else 0
+            try:
+                live_connected = bool(client.check_connect())
+            except Exception:
+                live_connected = False
         except Exception:
-            connected = False
-        assets = sorted(symbols, key=str.casefold)
-        return {"live": connected and bool(assets), "status": feed.status,
-                "count": len(assets), "assets": assets, "automatic_execution": False}
-    except Exception as exc:
-        return {"live": False, "status": "Broker catalog unavailable: " + type(exc).__name__,
-                "count": 0, "assets": [], "automatic_execution": False}
+            live_connected = False
+
+    assets = sorted(
+        (s for s in symbols if len(s) <= 80 and any(ch.isalpha() for ch in s)),
+        key=str.casefold
+    )
+    source = "live_broker_catalog+known_symbols" if live_catalog_count else "known_symbols_fallback"
+    return {
+        "live": bool(live_connected and live_catalog_count),
+        "status": feed.status,
+        "count": len(assets),
+        "assets": assets,
+        "catalog_source": source,
+        "live_catalog_count": live_catalog_count,
+        "automatic_execution": False
+    }
 
 @app.get("/api/market")
 def api_market(asset: str = DEFAULT_ASSET, tf: int = DEFAULT_TF):
