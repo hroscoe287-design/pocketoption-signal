@@ -560,14 +560,26 @@ class PocketOptionFeed:
                 normalized=[bytime[t] for t in sorted(bytime)][-120:]
             now=int(time.time())
             age=now-int(normalized[-1]["time"]) if normalized else None
-            fresh=bool(normalized) and -tf <= age <= max(15,tf*2)
+            latest_tick_age = now-int(normalized_tick_stamps[-1]) if normalized_tick_stamps else None
+            tick_fresh = (latest_tick_age is not None
+                          and -tf <= latest_tick_age <= max(15, tf*2))
+            # Fresh history alone is not proof of a live stream. Require a recent
+            # broker tick for this asset before allowing analysis.
+            fresh=bool(normalized) and -tf <= age <= max(15,tf*2) and tick_fresh
             if fresh:
                 with self.lock:self.cache[key]=normalized;self.updated[key]=time.time()
                 self.status="Pocket Option live candles — "+actual
                 self.debug={"stage":"live_verified","asset":actual,"timeframe_seconds":tf,"tick_count":len(ticks),
                     "history_count":len(raw or []),"normalized_candle_count":len(normalized),"last_candle_timestamp":normalized[-1]["time"]}
                 return self._response(asset,tf,normalized,time.time(),True,self.status)
-            reason="No valid candles returned" if not normalized else "Last candle is stale"
+            if not normalized:
+                reason="No valid candles returned"
+            elif not normalized_tick_stamps:
+                reason="No live ticks received for this asset"
+            elif not tick_fresh:
+                reason="Live ticks are stale"
+            else:
+                reason="Last candle is stale"
             self.status=reason
             self.debug={"stage":"feed_unverified","asset":actual,"timeframe_seconds":tf,"tick_count":len(ticks),
                 "history_count":len(raw or []),"normalized_candle_count":len(normalized),
@@ -575,6 +587,8 @@ class PocketOptionFeed:
                 "last_candle_age_seconds":age,"stream_timezone_offset_seconds":self.offset,
                 "latest_tick_candle_timestamp":tick_latest,
                 "latest_tick_candle_age_seconds":now-tick_latest if tick_latest is not None else None,
+                "latest_raw_tick_age_seconds":latest_tick_age,
+                "live_tick_fresh":tick_fresh,
                 "latest_history_candle_timestamp":history_latest,
                 "latest_history_candle_age_seconds":now-history_latest if history_latest is not None else None,
                 "raw_tick_timestamp_sample":raw_tick_stamps[-1] if raw_tick_stamps else None}
