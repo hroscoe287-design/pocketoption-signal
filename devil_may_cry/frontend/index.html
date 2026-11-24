@@ -194,7 +194,7 @@ async function loadBrokerAssets(){
   }
   if(clean.includes(previous))select.value=previous;
   else {const preferred=clean.find(s=>/AUD.?USD.*OTC/i.test(s))||clean.find(s=>/EUR.?USD.*OTC/i.test(s))||clean[0];if(preferred)select.value=preferred;}
-  if(status)status.textContent='Live Pocket Option catalog · '+clean.length+' assets grouped by market';
+  if(status)status.textContent=(d.live?'Live Pocket Option catalog':'Broker symbol list · live feed reconnecting')+' · '+clean.length+' assets grouped by market';
  }catch(e){if(status)status.textContent='Could not load live catalog · common assets remain available';console.warn('Live Pocket Option catalog unavailable',e)}
 }
 $('tf').addEventListener('change',()=>{const n=Number($('tf').value);const label=n<60?n+' sec':n<3600?(n/60)+' min':n<86400?(n/3600)+' hr':'1 day';$('expiryLabel').textContent=label;$('expiry').textContent=n<60?'00:'+String(n).padStart(2,'0'):n<3600?String(Math.floor(n/60)).padStart(2,'0')+':00':n<86400?String(Math.floor(n/3600)).padStart(2,'0')+':00:00':'1 day'});
